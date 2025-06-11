@@ -321,8 +321,29 @@ function createResponseHeaders(proxyResponse: Response, responseTime: number): H
   responseHeaders.set('X-Proxy-Status', 'success')
   responseHeaders.set('X-Response-Time', responseTime.toString())
   
-  // Set a permissive CSP for proxied content
-  responseHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * data: blob: 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src * data: blob: ; style-src * 'unsafe-inline';")
+  // Set a MORE permissive CSP for proxied content - Updated to allow scripts and styles
+  responseHeaders.set('Content-Security-Policy', 
+    "default-src 'self' * data: blob:; " +
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' * data: blob:; " +
+    "style-src 'self' 'unsafe-inline' * data: blob:; " +
+    "img-src 'self' * data: blob:; " +
+    "font-src 'self' * data: blob:; " +
+    "connect-src 'self' * data: blob:; " +
+    "media-src 'self' * data: blob:; " +
+    "object-src 'none'; " +
+    "frame-src 'self' * data: blob:; " +
+    "worker-src 'self' * blob:; " +
+    "form-action 'self' *; " +
+    "frame-ancestors 'self' *; " +
+    "base-uri 'self' *; " +
+    "manifest-src 'self' *"
+  )
+  
+  // Set X-Frame-Options to SAMEORIGIN to allow framing from same origin
+  responseHeaders.set('X-Frame-Options', 'SAMEORIGIN')
+  
+  // Remove X-Content-Type-Options to allow flexible content handling
+  responseHeaders.delete('X-Content-Type-Options')
   
   return responseHeaders
 }
@@ -342,6 +363,67 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
       // If no head tag, inject at the beginning
       html = `<base href="${baseUrl}/">\n${html}`
     }
+  }
+  
+  // Remove sandbox attributes from any iframes in the content to allow full functionality
+  html = html.replace(/<iframe([^>]*)sandbox=["'][^"']*["']([^>]*)>/gi, '<iframe$1$2>')
+  
+  // Add a script to help with cross-origin communication and script execution
+  const helperScript = `
+    <script>
+      // Helper script for proxy compatibility
+      (function() {
+        // Override fetch to handle relative URLs
+        const originalFetch = window.fetch;
+        window.fetch = function(url, options) {
+          if (typeof url === 'string' && !url.match(/^https?:\\/\\//)) {
+            url = new URL(url, '${baseUrl}').href;
+          }
+          return originalFetch.apply(this, [url, options]);
+        };
+        
+        // Override XMLHttpRequest to handle relative URLs
+        const OriginalXHR = window.XMLHttpRequest;
+        window.XMLHttpRequest = function() {
+          const xhr = new OriginalXHR();
+          const originalOpen = xhr.open;
+          xhr.open = function(method, url, ...args) {
+            if (typeof url === 'string' && !url.match(/^https?:\\/\\//)) {
+              url = new URL(url, '${baseUrl}').href;
+            }
+            return originalOpen.apply(this, [method, url, ...args]);
+          };
+          return xhr;
+        };
+        
+        // Allow message passing for script execution
+        window.addEventListener('message', function(e) { 
+          if (e.data && e.data.type === 'execute-script') {
+            try { 
+              eval(e.data.code); 
+            } catch(err) { 
+              console.error('Script execution error:', err); 
+            }
+          }
+        });
+      })();
+    </script>
+  `
+  
+  // Inject the helper script after the base tag or at the beginning of head
+  if (html.includes('</head>')) {
+    html = html.replace('</head>', helperScript + '\n</head>')
+  } else if (html.includes('<body')) {
+    html = html.replace(/<body([^>]*)>/i, `${helperScript}\n<body$1>`)
+  } else {
+    // If no proper HTML structure, add at the beginning
+    html = helperScript + '\n' + html
+  }
+  
+  // Optional: Add meta tag to disable X-Frame-Options if present in HTML
+  const metaTag = '<meta http-equiv="X-Frame-Options" content="SAMEORIGIN">'
+  if (!html.includes('X-Frame-Options') && html.includes('</head>')) {
+    html = html.replace('</head>', metaTag + '\n</head>')
   }
   
   // Optional: Rewrite absolute URLs to go through the proxy

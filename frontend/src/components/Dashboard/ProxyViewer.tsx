@@ -80,7 +80,9 @@ const ProxyViewer = ({ sessionUrl, targetDomain, onClose }: ProxyViewerProps) =>
             src={iframeUrl}
             className="w-full h-full border-0"
             onLoad={() => setIsLoading(false)}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation allow-top-navigation-by-user-activation allow-pointer-lock allow-orientation-lock"
+            allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; microphone; payment; autoplay; fullscreen; picture-in-picture; xr-spatial-tracking"
+            referrerPolicy="no-referrer-when-downgrade"
             title={`Proxy session for ${targetDomain}`}
           />
         </div>

@@ -556,10 +556,10 @@ supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_...
 **Step 5: Deploy Migrations and Functions**
 ```bash
 # Push all database migrations
-supabase db push
+npx supabase db push
 
 # Deploy all your edge functions
-supabase functions deploy
+npx supabase functions deploy proxy-service --no-verify-jwt  
 ```
 
 ---

@@ -191,8 +191,9 @@ const DirectProxyViewer = ({ targetDomain, sessionId, onClose }: DirectProxyView
               className="w-full h-full border-0"
               onLoad={handleIframeLoad}
               onError={handleIframeError}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation allow-top-navigation-by-user-activation"
-              allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; microphone; payment"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation allow-top-navigation-by-user-activation allow-pointer-lock allow-orientation-lock"
+              allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; microphone; payment; autoplay; fullscreen; picture-in-picture; xr-spatial-tracking"
+              referrerPolicy="no-referrer-when-downgrade"
               title={`Proxy view of ${currentUrl}`}
             />
           )}

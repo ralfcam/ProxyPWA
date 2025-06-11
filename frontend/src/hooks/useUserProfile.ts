@@ -27,6 +27,15 @@ export const useUserProfile = () => {
     }
 
     try {
+      // Check if we have a valid session first
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        console.log('No active session found')
+        setProfile(null)
+        setLoading(false)
+        return
+      }
+
       const { data, error } = await supabase
         .from('user_profiles')
         .select('*')
@@ -34,7 +43,10 @@ export const useUserProfile = () => {
         .single()
 
       if (error) {
-        console.error('Error fetching user profile:', error)
+        // Don't log 401 errors as they're expected when not authenticated
+        if (error.code !== 'PGRST301' && !error.message?.includes('JWT')) {
+          console.error('Error fetching user profile:', error)
+        }
         return
       }
 

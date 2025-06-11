@@ -40,16 +40,26 @@ const ProxyControl = () => {
 
   const loadActiveSession = async () => {
     try {
+      // Check if we have a valid session first
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session || !user?.id) {
+        console.log('No active session or user found')
+        return
+      }
+
       const { data, error } = await supabase
         .from('proxy_sessions')
         .select('*')
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .eq('status', 'active')
         .order('started_at', { ascending: false })
         .limit(1)
 
       if (error) {
-        console.error('Error loading active session:', error)
+        // Don't log 401 errors as they're expected when not authenticated
+        if (error.code !== 'PGRST301' && !error.message?.includes('JWT')) {
+          console.error('Error loading active session:', error)
+        }
         return
       }
 

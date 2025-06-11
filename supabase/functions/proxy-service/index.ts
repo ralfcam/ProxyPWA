@@ -77,8 +77,13 @@ serve(async (req) => {
       // Inject base tag and modify HTML for proxy compatibility
       const modifiedHtml = modifyHtmlForProxy(htmlText, validatedUrl, sessionId, url.origin + url.pathname.split('/proxy-service')[0] + '/proxy-service')
       responseBody = modifiedHtml
+    } else if (contentType.includes('text/css')) {
+      // Transform CSS content
+      const cssText = await proxyResponse.text()
+      responseSize = new TextEncoder().encode(cssText).length
+      responseBody = transformCssContent(cssText, validatedUrl)
     } else {
-      // For non-HTML content, just pass through as-is
+      // For non-HTML/CSS content, just pass through as-is
       responseBody = await proxyResponse.arrayBuffer()
       responseSize = responseBody.byteLength
     }
@@ -360,6 +365,9 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
   // Remove any X-Frame-Options meta tags from the HTML
   html = html.replace(/<meta[^>]*http-equiv=["']?X-Frame-Options["']?[^>]*>/gi, '')
   
+  // Remove any Content-Security-Policy meta tags that might restrict iframe usage
+  html = html.replace(/<meta[^>]*http-equiv=["']?Content-Security-Policy["']?[^>]*>/gi, '')
+  
   // Inject base tag if not present
   if (!html.includes('<base')) {
     const headMatch = html.match(/<head[^>]*>/i)
@@ -372,10 +380,43 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
     }
   }
   
+  // Transform relative URLs to absolute in HTML attributes
+  html = html.replace(
+    /(href|src|action|data-src|data-href)=["'](?!https?:\/\/|data:)([^"']+)["']/gi,
+    (match, attr, url) => {
+      try {
+        const absoluteUrl = new URL(url, targetUrl).href
+        return `${attr}="${absoluteUrl}"`
+      } catch {
+        return match
+      }
+    }
+  )
+  
+  // Transform srcset attributes (for responsive images)
+  html = html.replace(
+    /srcset=["']([^"']+)["']/gi,
+    (match, srcset) => {
+      const transformedSrcset = srcset.split(',').map((src: string) => {
+        const [url, descriptor] = src.trim().split(/\s+/)
+        if (!url.match(/^https?:\/\//)) {
+          try {
+            const absoluteUrl = new URL(url, targetUrl).href
+            return descriptor ? `${absoluteUrl} ${descriptor}` : absoluteUrl
+          } catch {
+            return src
+          }
+        }
+        return src
+      }).join(', ')
+      return `srcset="${transformedSrcset}"`
+    }
+  )
+  
   // Remove sandbox attributes from any iframes in the content to allow full functionality
   html = html.replace(/<iframe([^>]*)sandbox=["'][^"']*["']([^>]*)>/gi, '<iframe$1$2>')
   
-  // Add a script to help with cross-origin communication and script execution
+  // Enhanced helper script with better navigation handling
   const helperScript = `
     <script>
       // Helper script for proxy compatibility
@@ -384,12 +425,20 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
         window.__proxyBaseUrl = '${baseUrl}';
         window.__proxyServiceUrl = '${proxyBaseUrl}';
         window.__proxySessionId = '${sessionId || ''}';
+        window.__targetUrl = '${targetUrl}';
         
-        // Override fetch to handle relative URLs
+        // Override fetch to handle relative URLs and proxy all requests
         const originalFetch = window.fetch;
         window.fetch = function(url, options) {
-          if (typeof url === 'string' && !url.match(/^https?:\\/\\//)) {
-            url = new URL(url, '${baseUrl}').href;
+          if (typeof url === 'string') {
+            // Convert relative URLs to absolute
+            if (!url.match(/^https?:\\/\\//)) {
+              url = new URL(url, window.__targetUrl).href;
+            }
+            // Optionally proxy external requests through our service
+            // if (window.__proxySessionId && !url.startsWith(window.location.origin)) {
+            //   url = window.__proxyServiceUrl + '/' + window.__proxySessionId + '/' + encodeURIComponent(url);
+            // }
           }
           return originalFetch.apply(this, [url, options]);
         };
@@ -401,12 +450,44 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
           const originalOpen = xhr.open;
           xhr.open = function(method, url, ...args) {
             if (typeof url === 'string' && !url.match(/^https?:\\/\\//)) {
-              url = new URL(url, '${baseUrl}').href;
+              url = new URL(url, window.__targetUrl).href;
             }
             return originalOpen.apply(this, [method, url, ...args]);
           };
           return xhr;
         };
+        
+        // Enhanced navigation handling
+        function navigateThroughProxy(url) {
+          if (window.__proxySessionId) {
+            const absoluteUrl = new URL(url, window.__targetUrl).href;
+            const encodedUrl = encodeURIComponent(absoluteUrl);
+            window.top.location.href = window.__proxyServiceUrl + '/' + window.__proxySessionId + '/' + encodedUrl;
+          } else {
+            window.top.location.href = url;
+          }
+        }
+        
+        // Intercept link clicks for navigation through proxy
+        document.addEventListener('click', function(e) {
+          const link = e.target.closest('a');
+          if (link && link.href && !link.target && !link.download) {
+            e.preventDefault();
+            navigateThroughProxy(link.href);
+          }
+        }, true);
+        
+        // Intercept form submissions
+        document.addEventListener('submit', function(e) {
+          const form = e.target;
+          if (form && form.action && form.method.toLowerCase() === 'get') {
+            e.preventDefault();
+            const formData = new FormData(form);
+            const params = new URLSearchParams(formData);
+            const targetUrl = form.action + '?' + params.toString();
+            navigateThroughProxy(targetUrl);
+          }
+        }, true);
         
         // Allow message passing for script execution
         window.addEventListener('message', function(e) { 
@@ -417,40 +498,68 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
               console.error('Script execution error:', err); 
             }
           }
+          // Handle navigation messages from parent
+          if (e.data && e.data.type === 'navigate') {
+            navigateThroughProxy(e.data.url);
+          }
         });
         
         // Override window.location to handle navigation
         try {
+          const locationProxy = new Proxy(window.location, {
+            get: function(target, prop) {
+              if (prop === 'href' || prop === 'toString') {
+                return window.__targetUrl;
+              }
+              if (prop === 'assign' || prop === 'replace') {
+                return function(url) {
+                  navigateThroughProxy(url);
+                };
+              }
+              return target[prop];
+            },
+            set: function(target, prop, value) {
+              if (prop === 'href') {
+                navigateThroughProxy(value);
+                return true;
+              }
+              target[prop] = value;
+              return true;
+            }
+          });
+          
           Object.defineProperty(window, 'location', {
-            get: function() {
-              return new Proxy(window.location, {
-                get: function(target, prop) {
-                  if (prop === 'href' || prop === 'toString') {
-                    return '${targetUrl}';
-                  }
-                  return target[prop];
-                },
-                set: function(target, prop, value) {
-                  if (prop === 'href') {
-                    // Navigate through proxy
-                    if (window.__proxySessionId) {
-                      const encodedUrl = encodeURIComponent(value);
-                      window.top.location.href = window.__proxyServiceUrl + '/' + window.__proxySessionId + '/' + encodedUrl;
-                    } else {
-                      window.top.location.href = value;
-                    }
-                    return true;
-                  }
-                  target[prop] = value;
-                  return true;
-                }
-              });
+            get: () => locationProxy,
+            set: (value) => {
+              navigateThroughProxy(value);
             },
             configurable: true
           });
         } catch (e) {
           console.warn('Could not override window.location:', e);
         }
+        
+        // Override history API
+        const originalPushState = history.pushState;
+        const originalReplaceState = history.replaceState;
+        
+        history.pushState = function(...args) {
+          const [state, title, url] = args;
+          if (url) {
+            navigateThroughProxy(url);
+          } else {
+            originalPushState.apply(history, args);
+          }
+        };
+        
+        history.replaceState = function(...args) {
+          const [state, title, url] = args;
+          if (url) {
+            navigateThroughProxy(url);
+          } else {
+            originalReplaceState.apply(history, args);
+          }
+        };
       })();
     </script>
   `
@@ -465,23 +574,24 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
     html = helperScript + '\n' + html
   }
   
-  // Remove any Content-Security-Policy meta tags that might restrict iframe usage
-  html = html.replace(/<meta[^>]*http-equiv=["']?Content-Security-Policy["']?[^>]*>/gi, '')
-  
-  // Optional: Rewrite absolute URLs to go through the proxy
-  // This is commented out for now as it can be complex and may break some sites
-  // if (sessionId) {
-  //   // Rewrite src and href attributes
-  //   html = html.replace(
-  //     /(?:src|href)="(https?:\/\/[^"]+)"/gi,
-  //     (match, url) => {
-  //       const encodedUrl = encodeURIComponent(url)
-  //       return match.replace(url, `${proxyBaseUrl}/${sessionId}/${encodedUrl}`)
-  //     }
-  //   )
-  // }
-  
   return html
+}
+
+function transformCssContent(css: string, baseUrl: string): string {
+  // Transform relative URLs in CSS to absolute URLs
+  return css.replace(
+    /url\(["']?(?!https?:\/\/|data:)([^"')]+)["']?\)/gi,
+    (match, url) => {
+      try {
+        // Remove any quotes and whitespace
+        const cleanUrl = url.trim().replace(/^["']|["']$/g, '')
+        const absoluteUrl = new URL(cleanUrl, baseUrl).href
+        return `url("${absoluteUrl}")`
+      } catch {
+        return match
+      }
+    }
+  )
 }
 
 interface MetricsData {

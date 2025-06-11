@@ -116,9 +116,14 @@ const DirectProxyViewer = ({ targetDomain, sessionId, onClose }: DirectProxyView
 
         {/* Security Notice */}
         <div className="bg-green-50 dark:bg-green-900/20 border-b border-green-200 dark:border-green-800 p-3">
-          <div className="flex items-center gap-2 text-sm text-green-800 dark:text-green-200">
-            <Shield className="h-4 w-4 flex-shrink-0" />
-            <span>Secure proxy connection via Supabase Edge Functions - Session ID: {sessionId.slice(0, 8)}...</span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-green-800 dark:text-green-200">
+              <Shield className="h-4 w-4 flex-shrink-0" />
+              <span>Secure proxy connection via Supabase Edge Functions - Session ID: {sessionId.slice(0, 8)}...</span>
+            </div>
+            <div className="text-xs text-amber-600 dark:text-amber-400">
+              Note: Some websites may have limited functionality through proxy
+            </div>
           </div>
         </div>
 
@@ -155,6 +160,16 @@ const DirectProxyViewer = ({ targetDomain, sessionId, onClose }: DirectProxyView
                       <li>Content Security Policy restrictions</li>
                     </ul>
                   </div>
+                  
+                  {/* Special note for adult content sites */}
+                  {(currentUrl.includes('xhamster') || currentUrl.includes('pornhub') || currentUrl.includes('xvideos')) && (
+                    <div className="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                      <p className="text-sm text-amber-800 dark:text-amber-200">
+                        <strong>Note:</strong> Adult content websites often have strict security policies that prevent them from working through proxies. This is a limitation of the website, not the proxy service.
+                      </p>
+                    </div>
+                  )}
+                  
                   <div className="flex gap-2">
                     <Button onClick={handleRefresh} size="sm">
                       Try Again
@@ -176,7 +191,8 @@ const DirectProxyViewer = ({ targetDomain, sessionId, onClose }: DirectProxyView
               className="w-full h-full border-0"
               onLoad={handleIframeLoad}
               onError={handleIframeError}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation allow-top-navigation-by-user-activation"
+              allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; microphone; payment"
               title={`Proxy view of ${currentUrl}`}
             />
           )}

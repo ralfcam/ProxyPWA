@@ -64,9 +64,24 @@ serve(async (req) => {
     const endTime = Date.now()
     const responseTime = endTime - startTime
 
-    // Get response body as ArrayBuffer to calculate size
-    const responseBody = await proxyResponse.arrayBuffer()
-    const responseSize = responseBody.byteLength
+    // Get response body
+    const contentType = proxyResponse.headers.get('content-type') || ''
+    let responseBody: ArrayBuffer | string
+    let responseSize: number
+
+    // Check if the response is HTML that needs modification
+    if (contentType.includes('text/html')) {
+      const htmlText = await proxyResponse.text()
+      responseSize = new TextEncoder().encode(htmlText).length
+      
+      // Inject base tag and modify HTML for proxy compatibility
+      const modifiedHtml = modifyHtmlForProxy(htmlText, validatedUrl, sessionId, url.origin + url.pathname.split('/proxy-service')[0] + '/proxy-service')
+      responseBody = modifiedHtml
+    } else {
+      // For non-HTML content, just pass through as-is
+      responseBody = await proxyResponse.arrayBuffer()
+      responseSize = responseBody.byteLength
+    }
 
     // Update metrics and logs for authenticated requests
     if (mode === 'authenticated' && sessionId && userId) {
@@ -79,7 +94,7 @@ serve(async (req) => {
         statusCode: proxyResponse.status,
         method: req.method,
         userAgent: req.headers.get('user-agent'),
-        contentType: proxyResponse.headers.get('content-type'),
+        contentType: contentType,
       })
     }
 
@@ -276,8 +291,20 @@ function createResponseHeaders(proxyResponse: Response, responseTime: number): H
     'etag'
   ]
   
+  // Headers to explicitly exclude (security-related)
+  const excludedHeaders = [
+    'content-security-policy',
+    'content-security-policy-report-only',
+    'x-frame-options',
+    'x-content-type-options',
+    'strict-transport-security',
+    'permissions-policy',
+    'feature-policy'
+  ]
+  
   for (const [key, value] of proxyResponse.headers.entries()) {
-    if (safeResponseHeaders.includes(key.toLowerCase())) {
+    const lowerKey = key.toLowerCase()
+    if (safeResponseHeaders.includes(lowerKey) && !excludedHeaders.includes(lowerKey)) {
       responseHeaders.set(key, value)
     }
   }
@@ -286,7 +313,43 @@ function createResponseHeaders(proxyResponse: Response, responseTime: number): H
   responseHeaders.set('X-Proxy-Status', 'success')
   responseHeaders.set('X-Response-Time', responseTime.toString())
   
+  // Set a permissive CSP for proxied content
+  responseHeaders.set('Content-Security-Policy', "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; script-src * 'unsafe-inline' 'unsafe-eval'; connect-src * data: blob: 'unsafe-inline'; img-src * data: blob: 'unsafe-inline'; frame-src * data: blob: ; style-src * 'unsafe-inline';")
+  
   return responseHeaders
+}
+
+function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string | undefined, proxyBaseUrl: string): string {
+  // Parse the target URL to get the base URL
+  const targetUrlObj = new URL(targetUrl)
+  const baseUrl = `${targetUrlObj.protocol}//${targetUrlObj.host}`
+  
+  // Inject base tag if not present
+  if (!html.includes('<base')) {
+    const headMatch = html.match(/<head[^>]*>/i)
+    if (headMatch) {
+      const baseTag = `<base href="${baseUrl}/">`
+      html = html.replace(headMatch[0], `${headMatch[0]}\n    ${baseTag}`)
+    } else {
+      // If no head tag, inject at the beginning
+      html = `<base href="${baseUrl}/">\n${html}`
+    }
+  }
+  
+  // Optional: Rewrite absolute URLs to go through the proxy
+  // This is commented out for now as it can be complex and may break some sites
+  // if (sessionId) {
+  //   // Rewrite src and href attributes
+  //   html = html.replace(
+  //     /(?:src|href)="(https?:\/\/[^"]+)"/gi,
+  //     (match, url) => {
+  //       const encodedUrl = encodeURIComponent(url)
+  //       return match.replace(url, `${proxyBaseUrl}/${sessionId}/${encodedUrl}`)
+  //     }
+  //   )
+  // }
+  
+  return html
 }
 
 interface MetricsData {

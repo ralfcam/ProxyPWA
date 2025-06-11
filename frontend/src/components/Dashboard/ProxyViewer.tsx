@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
-import { ArrowLeft, RefreshCw, Home, ExternalLink } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowLeft, RefreshCw, ExternalLink } from 'lucide-react'
 import Button from '../ui/Button'
-import { Card, CardContent, CardHeader } from '../ui/Card'
 
 interface ProxyViewerProps {
   sessionUrl: string

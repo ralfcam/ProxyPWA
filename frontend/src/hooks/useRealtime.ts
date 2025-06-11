@@ -2,9 +2,22 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
+interface ProxySession {
+  id: string
+  user_id: string
+  bytes_transferred: number
+  started_at: string
+  status: string
+}
+
+interface Stats {
+  bytesTransferred: number
+  activeTime: number
+}
+
 export const useRealtime = (userId: string) => {
-  const [proxySession, setProxySession] = useState(null)
-  const [stats, setStats] = useState({ bytesTransferred: 0, activeTime: 0 })
+  const [proxySession, setProxySession] = useState<ProxySession | null>(null)
+  const [stats, setStats] = useState<Stats>({ bytesTransferred: 0, activeTime: 0 })
 
   useEffect(() => {
     if (!userId) return
@@ -19,11 +32,11 @@ export const useRealtime = (userId: string) => {
           table: 'proxy_sessions',
           filter: `user_id=eq.${userId}`
         }, 
-        (payload) => {
+        (payload: { new: ProxySession }) => {
           setProxySession(payload.new)
           setStats({
             bytesTransferred: payload.new.bytes_transferred,
-            activeTime: Math.floor((new Date() - new Date(payload.new.started_at)) / 1000)
+            activeTime: Math.floor((Date.now() - new Date(payload.new.started_at).getTime()) / 1000)
           })
         }
       )

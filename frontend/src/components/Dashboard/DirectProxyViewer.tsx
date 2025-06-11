@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { ArrowLeft, RefreshCw, ExternalLink, AlertCircle, Shield, Globe } from 'lucide-react'
 import Button from '../ui/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card'
-import { toast } from 'react-hot-toast'
 
 interface DirectProxyViewerProps {
   targetDomain: string

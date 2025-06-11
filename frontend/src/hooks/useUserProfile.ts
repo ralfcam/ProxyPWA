@@ -56,7 +56,7 @@ export const useUserProfile = () => {
 
     const channel = supabase.channel(`user_profile_${user.id}`)
     
-    const subscription = channel
+    channel
       .on(
         'postgres_changes',
         {

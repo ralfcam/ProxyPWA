@@ -1,5 +1,4 @@
 ﻿import { Routes, Route, Navigate } from 'react-router-dom'
-import { useState } from 'react'
 import DashboardLayout from './DashboardLayout'
 import ProxyControl from './ProxyControl'
 import Statistics from './Statistics'

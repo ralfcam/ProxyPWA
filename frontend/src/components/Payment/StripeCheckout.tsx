@@ -1,4 +1,5 @@
 ﻿// frontend/src/components/Payment/StripeCheckout.tsx
+import { useState } from 'react'
 import { loadStripe } from '@stripe/stripe-js'
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js'
 import { supabase } from '../../lib/supabase'
@@ -18,7 +19,7 @@ const CheckoutForm = ({ amount, timePackage }: { amount: number, timePackage: st
   const elements = useElements()
   const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (event) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!stripe || !elements) return
 

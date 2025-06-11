@@ -21,11 +21,6 @@ interface ProxySession {
   requests_count: number
 }
 
-interface StartProxySessionResult {
-  session_id: string
-  session_url: string
-}
-
 const ProxyControl = () => {
   const [targetUrl, setTargetUrl] = useState('')
   const [loading, setLoading] = useState(false)
@@ -172,11 +167,6 @@ const ProxyControl = () => {
     } else {
       toast.error('Failed to copy URL')
     }
-  }
-
-  const openInNewTab = () => {
-    if (!activeSession) return
-    window.open(activeSession.session_url, '_blank')
   }
 
   const openProxyViewer = () => {

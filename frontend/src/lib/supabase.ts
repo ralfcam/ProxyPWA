@@ -17,9 +17,9 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   },
   realtime: {
     params: {
-      eventsPerSecond: 10,
-    },
-  },
+      eventsPerSecond: 10
+    }
+  }
 })
 
 // Helper function to check if user is authenticated
@@ -38,5 +38,16 @@ export const signOut = async () => {
   if (error) {
     console.error('Error signing out:', error)
     throw error
+  }
+}
+
+// Helper function to safely remove a channel
+export const safeRemoveChannel = async (channel: ReturnType<typeof supabase.channel> | null) => {
+  if (!channel) return
+  try {
+    await channel.unsubscribe()
+    await supabase.removeChannel(channel)
+  } catch (error) {
+    console.error('Error removing channel:', error)
   }
 }

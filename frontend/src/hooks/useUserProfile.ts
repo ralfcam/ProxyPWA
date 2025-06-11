@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, safeRemoveChannel } from '../lib/supabase'
 import { useAuth } from './useAuth'
 
 interface UserProfile {
@@ -65,38 +65,53 @@ export const useUserProfile = () => {
 
   // Subscribe to real-time updates of user profile
   useEffect(() => {
-    if (!user) return
-
-    // Clean up previous subscription if it exists
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current)
-      channelRef.current = null
-    }
-
-    // Create new subscription
-    const channel = supabase.channel(`user_profile_${user.id}`)
-    channelRef.current = channel
+    let mounted = true
     
-    channel
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'user_profiles',
-          filter: `id=eq.${user.id}`,
-        },
-        (payload) => {
-          setProfile(payload.new as UserProfile)
-        }
-      )
-      .subscribe()
+    const setupChannel = async () => {
+      if (!user || !mounted) return
 
-    return () => {
+      // Clean up previous subscription if it exists
       if (channelRef.current) {
-        supabase.removeChannel(channelRef.current)
+        await safeRemoveChannel(channelRef.current)
         channelRef.current = null
       }
+
+      // Create new subscription with a unique channel name
+      const channelName = `user_profile_${user.id}_${Date.now()}`
+      const channel = supabase.channel(channelName)
+      channelRef.current = channel
+      
+      try {
+        await channel
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'user_profiles',
+              filter: `id=eq.${user.id}`,
+            },
+            (payload) => {
+              if (mounted) {
+                setProfile(payload.new as UserProfile)
+              }
+            }
+          )
+          .subscribe()
+      } catch (error) {
+        console.error('Error setting up channel:', error)
+        if (mounted) {
+          channelRef.current = null
+        }
+      }
+    }
+
+    setupChannel()
+
+    return () => {
+      mounted = false
+      safeRemoveChannel(channelRef.current)
+      channelRef.current = null
     }
   }, [user])
 

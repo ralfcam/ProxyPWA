@@ -278,7 +278,15 @@ function createProxyHeaders(req: Request): Headers {
 }
 
 function createResponseHeaders(proxyResponse: Response, responseTime: number): Headers {
-  const responseHeaders = new Headers(corsHeaders)
+  // Get the origin from the request
+  const origin = proxyResponse.headers.get('origin')
+  
+  // Create response headers with dynamic CORS headers
+  const responseHeaders = new Headers({
+    ...corsHeaders,
+    'Access-Control-Allow-Origin': origin || corsHeaders['Access-Control-Allow-Origin'],
+    'Access-Control-Allow-Credentials': 'true'
+  })
   
   // Copy safe response headers
   const safeResponseHeaders = [

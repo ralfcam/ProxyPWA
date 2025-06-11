@@ -223,3 +223,10 @@ For issues and questions:
 - Check the troubleshooting section
 - Review Supabase documentation
 - Open an issue in the repository 
+
+---
+
+OTHER NOTES 
+In your Vercel project settings, you need to rename the environment variables:
+Change NEXT_PUBLIC_SUPABASE_URL → VITE_SUPABASE_URL
+Change NEXT_PUBLIC_SUPABASE_ANON_KEY → VITE_SUPABASE_ANON_KEY

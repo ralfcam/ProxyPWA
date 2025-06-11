@@ -491,6 +491,7 @@ This will start the local database and Edge Functions.
 ```bash
 # Make sure Docker is running
 supabase start
+npx supabase functions serve proxy-service --no-verify-jwt
 ```
 Note the local function URL, usually `http://localhost:54321/functions/v1/stripe-webhooks`.
 

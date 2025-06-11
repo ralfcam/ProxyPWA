@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from './useAuth'
 
@@ -18,6 +18,7 @@ export const useUserProfile = () => {
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [loading, setLoading] = useState(true)
   const { user } = useAuth()
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
 
   const fetchProfile = async () => {
     if (!user) {
@@ -66,7 +67,15 @@ export const useUserProfile = () => {
   useEffect(() => {
     if (!user) return
 
+    // Clean up previous subscription if it exists
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current)
+      channelRef.current = null
+    }
+
+    // Create new subscription
     const channel = supabase.channel(`user_profile_${user.id}`)
+    channelRef.current = channel
     
     channel
       .on(
@@ -84,7 +93,10 @@ export const useUserProfile = () => {
       .subscribe()
 
     return () => {
-      supabase.removeChannel(channel)
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current)
+        channelRef.current = null
+      }
     }
   }, [user])
 

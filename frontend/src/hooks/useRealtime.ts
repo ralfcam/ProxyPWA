@@ -1,5 +1,5 @@
 ﻿// frontend/src/hooks/useRealtime.ts
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 
 interface ProxySession {
@@ -18,13 +18,22 @@ interface Stats {
 export const useRealtime = (userId: string) => {
   const [proxySession, setProxySession] = useState<ProxySession | null>(null)
   const [stats, setStats] = useState<Stats>({ bytesTransferred: 0, activeTime: 0 })
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
 
   useEffect(() => {
     if (!userId) return
 
-    // Subscribe to proxy session changes
-    const sessionSubscription = supabase
-      .channel('proxy-sessions')
+    // Clean up previous subscription if it exists
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current)
+      channelRef.current = null
+    }
+
+    // Create new subscription
+    const channel = supabase.channel(`proxy-sessions-${userId}`)
+    channelRef.current = channel
+
+    channel
       .on('postgres_changes', 
         { 
           event: 'UPDATE', 
@@ -43,7 +52,10 @@ export const useRealtime = (userId: string) => {
       .subscribe()
 
     return () => {
-      sessionSubscription.unsubscribe()
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current)
+        channelRef.current = null
+      }
     }
   }, [userId])
 

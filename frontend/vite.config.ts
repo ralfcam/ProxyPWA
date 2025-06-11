@@ -73,10 +73,10 @@ export default defineConfig({
               cacheName: 'supabase-api-cache',
               expiration: {
                 maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 365 // <== 365 days
+                maxAgeSeconds: 60 * 60 * 24 * 365 // 365 days
               },
-              cacheKeyWillBeUsed: async ({ request }) => {
-                return `${request.url}?${new Date().getTime()}`
+              cacheableResponse: {
+                statuses: [0, 200]
               }
             }
           }

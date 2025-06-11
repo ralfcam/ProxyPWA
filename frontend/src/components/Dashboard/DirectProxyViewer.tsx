@@ -176,7 +176,7 @@ const DirectProxyViewer = ({ targetDomain, sessionId, onClose }: DirectProxyView
               className="w-full h-full border-0"
               onLoad={handleIframeLoad}
               onError={handleIframeError}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"
               title={`Proxy view of ${currentUrl}`}
             />
           )}

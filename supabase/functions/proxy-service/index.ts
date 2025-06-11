@@ -321,6 +321,9 @@ function createResponseHeaders(proxyResponse: Response, responseTime: number): H
   responseHeaders.set('X-Proxy-Status', 'success')
   responseHeaders.set('X-Response-Time', responseTime.toString())
   
+  // IMPORTANT: Remove X-Frame-Options completely to allow iframe embedding
+  responseHeaders.delete('X-Frame-Options')
+  
   // Set a MORE permissive CSP for proxied content - Updated to allow scripts and styles
   responseHeaders.set('Content-Security-Policy', 
     "default-src 'self' * data: blob:; " +
@@ -334,16 +337,17 @@ function createResponseHeaders(proxyResponse: Response, responseTime: number): H
     "frame-src 'self' * data: blob:; " +
     "worker-src 'self' * blob:; " +
     "form-action 'self' *; " +
-    "frame-ancestors 'self' *; " +
+    "frame-ancestors *; " +  // Changed from 'self' * to just * to allow any origin
     "base-uri 'self' *; " +
     "manifest-src 'self' *"
   )
   
-  // Set X-Frame-Options to SAMEORIGIN to allow framing from same origin
-  responseHeaders.set('X-Frame-Options', 'SAMEORIGIN')
-  
   // Remove X-Content-Type-Options to allow flexible content handling
   responseHeaders.delete('X-Content-Type-Options')
+  
+  // Also remove any other headers that might prevent iframe embedding
+  responseHeaders.delete('Permissions-Policy')
+  responseHeaders.delete('Feature-Policy')
   
   return responseHeaders
 }
@@ -352,6 +356,9 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
   // Parse the target URL to get the base URL
   const targetUrlObj = new URL(targetUrl)
   const baseUrl = `${targetUrlObj.protocol}//${targetUrlObj.host}`
+  
+  // Remove any X-Frame-Options meta tags from the HTML
+  html = html.replace(/<meta[^>]*http-equiv=["']?X-Frame-Options["']?[^>]*>/gi, '')
   
   // Inject base tag if not present
   if (!html.includes('<base')) {
@@ -373,6 +380,11 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
     <script>
       // Helper script for proxy compatibility
       (function() {
+        // Store the original base URL
+        window.__proxyBaseUrl = '${baseUrl}';
+        window.__proxyServiceUrl = '${proxyBaseUrl}';
+        window.__proxySessionId = '${sessionId || ''}';
+        
         // Override fetch to handle relative URLs
         const originalFetch = window.fetch;
         window.fetch = function(url, options) {
@@ -406,6 +418,39 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
             }
           }
         });
+        
+        // Override window.location to handle navigation
+        try {
+          Object.defineProperty(window, 'location', {
+            get: function() {
+              return new Proxy(window.location, {
+                get: function(target, prop) {
+                  if (prop === 'href' || prop === 'toString') {
+                    return '${targetUrl}';
+                  }
+                  return target[prop];
+                },
+                set: function(target, prop, value) {
+                  if (prop === 'href') {
+                    // Navigate through proxy
+                    if (window.__proxySessionId) {
+                      const encodedUrl = encodeURIComponent(value);
+                      window.top.location.href = window.__proxyServiceUrl + '/' + window.__proxySessionId + '/' + encodedUrl;
+                    } else {
+                      window.top.location.href = value;
+                    }
+                    return true;
+                  }
+                  target[prop] = value;
+                  return true;
+                }
+              });
+            },
+            configurable: true
+          });
+        } catch (e) {
+          console.warn('Could not override window.location:', e);
+        }
       })();
     </script>
   `
@@ -420,11 +465,8 @@ function modifyHtmlForProxy(html: string, targetUrl: string, sessionId: string |
     html = helperScript + '\n' + html
   }
   
-  // Optional: Add meta tag to disable X-Frame-Options if present in HTML
-  const metaTag = '<meta http-equiv="X-Frame-Options" content="SAMEORIGIN">'
-  if (!html.includes('X-Frame-Options') && html.includes('</head>')) {
-    html = html.replace('</head>', metaTag + '\n</head>')
-  }
+  // Remove any Content-Security-Policy meta tags that might restrict iframe usage
+  html = html.replace(/<meta[^>]*http-equiv=["']?Content-Security-Policy["']?[^>]*>/gi, '')
   
   // Optional: Rewrite absolute URLs to go through the proxy
   // This is commented out for now as it can be complex and may break some sites

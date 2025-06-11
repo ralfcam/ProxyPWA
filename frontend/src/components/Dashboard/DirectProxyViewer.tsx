@@ -65,6 +65,20 @@ const DirectProxyViewer = ({ targetDomain, sessionId, onClose }: DirectProxyView
     setError('Failed to load page through proxy. The website may block proxy connections.')
   }
 
+  // Add a message handler to detect iframe loading issues
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      // Handle messages from the proxied content
+      if (event.data && event.data.type === 'proxy-error') {
+        setError(event.data.message || 'Failed to load content through proxy')
+        setIsLoading(false)
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [])
+
   return (
     <div className="fixed inset-0 z-50 bg-background">
       <div className="flex flex-col h-full">
@@ -191,8 +205,8 @@ const DirectProxyViewer = ({ targetDomain, sessionId, onClose }: DirectProxyView
               className="w-full h-full border-0"
               onLoad={handleIframeLoad}
               onError={handleIframeError}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation allow-top-navigation-by-user-activation allow-pointer-lock allow-orientation-lock"
-              allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; microphone; payment; autoplay; fullscreen; picture-in-picture; xr-spatial-tracking"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation allow-top-navigation allow-top-navigation-by-user-activation allow-pointer-lock allow-orientation-lock"
+              allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; microphone; payment; autoplay; fullscreen; picture-in-picture; xr-spatial-tracking; clipboard-read; clipboard-write"
               referrerPolicy="no-referrer-when-downgrade"
               title={`Proxy view of ${currentUrl}`}
             />

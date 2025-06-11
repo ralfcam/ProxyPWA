@@ -186,7 +186,6 @@ const ProxyControl = () => {
         ) : (
           <WebProxyViewer
             targetDomain={activeSession.target_domain}
-            sessionId={activeSession.id}
             onClose={() => setShowProxyViewer(false)}
           />
         )

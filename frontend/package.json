@@ -29,7 +29,7 @@
         "@typescript-eslint/parser": "^6.14.0",
         "@vitejs/plugin-react": "^4.2.1",
         "autoprefixer": "^10.4.16",
-        "eslint": "^8.55.0",
+        "eslint": "^9.0.0-alpha.0",
         "eslint-plugin-react-hooks": "^4.6.0",
         "eslint-plugin-react-refresh": "^0.4.5",
         "postcss": "^8.4.32",
@@ -38,5 +38,12 @@
         "vite": "^5.0.8",
         "vite-plugin-pwa": "^0.17.4",
         "workbox-window": "^7.0.0"
+    },
+    "resolutions": {
+        "sourcemap-codec": "@jridgewell/sourcemap-codec",
+        "glob": "^10.0.0",
+        "@humanwhocodes/object-schema": "@eslint/object-schema",
+        "@humanwhocodes/config-array": "@eslint/config-array",
+        "rimraf": "^5.0.0"
     }
 }

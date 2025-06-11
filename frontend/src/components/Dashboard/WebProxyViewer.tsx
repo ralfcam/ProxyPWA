@@ -7,11 +7,10 @@ import { toast } from 'react-hot-toast'
 
 interface WebProxyViewerProps {
   targetDomain: string
-  sessionId: string
   onClose: () => void
 }
 
-const WebProxyViewer = ({ targetDomain, sessionId, onClose }: WebProxyViewerProps) => {
+const WebProxyViewer = ({ targetDomain, onClose }: WebProxyViewerProps) => {
   const [currentUrl, setCurrentUrl] = useState('')
   const [copied, setCopied] = useState(false)
   

@@ -15,7 +15,25 @@ serve(async (req) => {
     // Parse the request to determine proxy mode and extract parameters
     const { mode, sessionId, targetUrl } = parseProxyRequest(url)
     
+    // If no target URL is provided, return a helpful message instead of error
     if (!targetUrl) {
+      // Check if this is just a test request to the function endpoint
+      if (!sessionId) {
+        return new Response(
+          JSON.stringify({ 
+            message: 'Proxy service is running. Please provide a session ID and target URL.',
+            usage: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}',
+            example: 'GET /proxy-service/abc123/https%3A%2F%2Fexample.com'
+          }), 
+          { 
+            status: 200,
+            headers: { 
+              ...corsHeaders,
+              'Content-Type': 'application/json' 
+            }
+          }
+        )
+      }
       throw new Error('Missing target URL')
     }
 

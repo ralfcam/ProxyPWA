@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/Card'
-import { Settings as SettingsIcon, Moon, Sun, Bell, Shield, Globe, Save } from 'lucide-react'
+import { Moon, Sun, Bell, Shield, Globe, Save } from 'lucide-react'
 import Button from '../ui/Button'
 import { toast } from 'react-hot-toast'
 import { useTheme } from '../../hooks/useTheme'

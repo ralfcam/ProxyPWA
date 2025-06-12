@@ -1,6 +1,233 @@
 import { serve } from 'https://deno.land/std@0.192.0/http/server.ts'
+import { DOMParser, Element, Document } from 'jsr:@b-fuze/deno-dom'
 import { getSupabaseClient } from '../_shared/supabase.ts'
 import { corsHeaders, handleCors } from '../_shared/cors.ts'
+
+// SSR Processing Types and Functions
+interface SSRProcessingOptions {
+  targetUrl: string
+  sessionId?: string
+  proxyBaseUrl: string
+  removeScripts?: boolean
+  inlineStyles?: boolean
+}
+
+function processHtmlForSSR(
+  html: string, 
+  options: SSRProcessingOptions
+): string {
+  const { targetUrl, sessionId, proxyBaseUrl, removeScripts = true, inlineStyles = false } = options
+  
+  // Parse HTML using deno-dom
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  if (!doc) {
+    console.warn('Failed to parse HTML document')
+    return html
+  }
+
+  const targetUrlObj = new URL(targetUrl)
+  const baseUrl = `${targetUrlObj.protocol}//${targetUrlObj.host}`
+
+  // Remove problematic security headers from meta tags
+  removeSecurityMetaTags(doc)
+  
+  // Inject base tag for proper resource resolution
+  injectBaseTag(doc, baseUrl)
+  
+  // Transform URLs to absolute paths
+  transformUrls(doc, targetUrl)
+  
+  // Remove or modify problematic scripts
+  if (removeScripts) {
+    removeProblematicScripts(doc)
+  }
+  
+  // Handle stylesheets
+  if (inlineStyles) {
+    // Note: Async operations would need to be handled separately
+    transformStylesheetUrls(doc, targetUrl)
+  } else {
+    transformStylesheetUrls(doc, targetUrl)
+  }
+  
+  // Add SSR metadata
+  addSSRMetadata(doc, sessionId)
+  
+  return doc.documentElement?.outerHTML || html
+}
+
+function removeSecurityMetaTags(doc: Document): void {
+  // Remove CSP and X-Frame-Options meta tags
+  const securityMetas = doc.querySelectorAll(
+    'meta[http-equiv*="Content-Security-Policy"], ' +
+    'meta[http-equiv*="X-Frame-Options"], ' +
+    'meta[http-equiv*="content-security-policy"], ' +
+    'meta[http-equiv*="x-frame-options"]'
+  )
+  
+  securityMetas.forEach(meta => meta.remove())
+}
+
+function injectBaseTag(doc: Document, baseUrl: string): void {
+  const head = doc.querySelector('head')
+  if (!head) return
+  
+  // Remove existing base tags
+  const existingBase = head.querySelector('base')
+  if (existingBase) {
+    existingBase.remove()
+  }
+  
+  // Create new base tag
+  const baseTag = doc.createElement('base')
+  baseTag.setAttribute('href', `${baseUrl}/`)
+  head.insertBefore(baseTag, head.firstChild)
+}
+
+function transformUrls(doc: Document, targetUrl: string): void {
+  const urlAttributes = ['href', 'src', 'action', 'data-src', 'data-href']
+  
+  urlAttributes.forEach(attr => {
+    const elements = doc.querySelectorAll(`[${attr}]`)
+    
+    elements.forEach((element: Element) => {
+      const value = element.getAttribute(attr)
+      if (!value || value.startsWith('http') || value.startsWith('data:') || value.startsWith('#')) {
+        return
+      }
+      
+      try {
+        const absoluteUrl = new URL(value, targetUrl).href
+        element.setAttribute(attr, absoluteUrl)
+      } catch (error) {
+        console.warn(`Failed to transform URL: ${value}`, error)
+      }
+    })
+  })
+}
+
+function removeProblematicScripts(doc: Document): void {
+  // Remove analytics, tracking, and ad scripts
+  const problematicSelectors = [
+    'script[src*="analytics"]',
+    'script[src*="tracking"]',
+    'script[src*="ads"]',
+    'script[src*="googletagmanager"]',
+    'script[async][src*="google"]',
+    'iframe[src*="ads"]'
+  ]
+  
+  problematicSelectors.forEach(selector => {
+    const elements = doc.querySelectorAll(selector)
+    elements.forEach(el => el.remove())
+  })
+}
+
+function transformStylesheetUrls(doc: Document, targetUrl: string): void {
+  const styleElements = doc.querySelectorAll('link[rel="stylesheet"]')
+  
+  styleElements.forEach((element: Element) => {
+    const href = element.getAttribute('href')
+    if (href && !href.startsWith('http') && !href.startsWith('data:')) {
+      try {
+        const absoluteUrl = new URL(href, targetUrl).href
+        element.setAttribute('href', absoluteUrl)
+      } catch (error) {
+        console.warn(`Failed to transform stylesheet URL: ${href}`, error)
+      }
+    }
+  })
+}
+
+function addSSRMetadata(doc: Document, sessionId?: string): void {
+  const head = doc.querySelector('head')
+  if (!head) return
+  
+  // Add SSR indicator
+  const ssrMeta = doc.createElement('meta')
+  ssrMeta.setAttribute('name', 'proxy-ssr-enabled')
+  ssrMeta.setAttribute('content', 'true')
+  head.appendChild(ssrMeta)
+  
+  // Add session information if available
+  if (sessionId) {
+    const sessionMeta = doc.createElement('meta')
+    sessionMeta.setAttribute('name', 'proxy-session-id')
+    sessionMeta.setAttribute('content', sessionId)
+    head.appendChild(sessionMeta)
+  }
+}
+
+function createSSRResponseHeaders(
+  proxyResponse: Response, 
+  responseTime: number,
+  mode: 'permissive' | 'balanced' | 'strict' = 'balanced'
+): Headers {
+  const responseHeaders = new Headers({
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With'
+  })
+
+  // Copy safe response headers
+  const safeHeaders = [
+    'content-type',
+    'content-language',
+    'cache-control',
+    'expires',
+    'last-modified'
+  ]
+
+  // Remove all potentially problematic security headers
+  const excludedHeaders = [
+    'content-security-policy',
+    'content-security-policy-report-only',
+    'x-frame-options',
+    'x-content-type-options',
+    'strict-transport-security',
+    'permissions-policy',
+    'feature-policy',
+    'referrer-policy'
+  ]
+
+  for (const [key, value] of proxyResponse.headers.entries()) {
+    const lowerKey = key.toLowerCase()
+    if (safeHeaders.includes(lowerKey) && !excludedHeaders.includes(lowerKey)) {
+      responseHeaders.set(key, value)
+    }
+  }
+
+  // Set CSP based on mode
+  const cspPolicies = {
+    permissive: "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; " +
+                "script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; " +
+                "style-src * 'unsafe-inline' data: blob:; " +
+                "img-src * data: blob:; " +
+                "font-src * data: blob:; " +
+                "connect-src * data: blob:; " +
+                "frame-ancestors *;",
+    
+    balanced: "default-src 'self' * data: blob: 'unsafe-inline'; " +
+              "script-src 'self' * 'unsafe-inline' 'unsafe-eval'; " +
+              "style-src 'self' * 'unsafe-inline'; " +
+              "img-src * data: blob:; " +
+              "frame-ancestors *;",
+    
+    strict: "default-src 'self'; " +
+            "script-src 'self' 'unsafe-inline'; " +
+            "style-src 'self' 'unsafe-inline'; " +
+            "img-src 'self' data:; " +
+            "frame-ancestors 'self';"
+  }
+
+  responseHeaders.set('Content-Security-Policy', cspPolicies[mode])
+  responseHeaders.set('X-Proxy-Status', 'ssr-success')
+  responseHeaders.set('X-Response-Time', responseTime.toString())
+  responseHeaders.set('X-Proxy-Mode', 'ssr')
+
+  return responseHeaders
+}
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -15,15 +242,31 @@ serve(async (req) => {
     // Parse the request to determine proxy mode and extract parameters
     const { mode, sessionId, targetUrl } = parseProxyRequest(url)
     
+    // Check for SSR mode parameter
+    const ssrMode = url.searchParams.get('ssr') === 'true'
+    const cspMode = url.searchParams.get('csp') as 'permissive' | 'balanced' | 'strict' || 'balanced'
+    
     // If no target URL is provided, return a helpful message instead of error
     if (!targetUrl) {
       // Check if this is just a test request to the function endpoint
       if (!sessionId) {
         return new Response(
           JSON.stringify({ 
-            message: 'Proxy service is running. Please provide a session ID and target URL.',
-            usage: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}',
-            example: 'GET /proxy-service/abc123/https%3A%2F%2Fexample.com'
+            message: 'Enhanced Proxy Service v2.0 - SSR Enabled',
+            status: 'operational',
+            features: {
+              ssr: 'Server-side rendering for CSP bypass',
+              modes: ['iframe', 'ssr', 'auto'],
+              cspLevels: ['permissive', 'balanced', 'strict'],
+              defaultMode: 'ssr',
+              defaultCsp: 'permissive'
+            },
+            usage: {
+              basic: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}',
+              withSSR: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&csp=permissive',
+              example: 'GET /proxy-service/abc123/https%3A%2F%2Fexample.com?ssr=true&csp=permissive'
+            },
+            version: '2.0.0'
           }), 
           { 
             status: 200,
@@ -74,9 +317,20 @@ serve(async (req) => {
       const htmlText = await proxyResponse.text()
       responseSize = new TextEncoder().encode(htmlText).length
       
-      // Inject base tag and modify HTML for proxy compatibility
-      const modifiedHtml = modifyHtmlForProxy(htmlText, validatedUrl, sessionId, url.origin + url.pathname.split('/proxy-service')[0] + '/proxy-service')
-      responseBody = modifiedHtml
+      if (ssrMode) {
+        // Use enhanced SSR processing
+        responseBody = processHtmlForSSR(htmlText, {
+          targetUrl: validatedUrl,
+          sessionId,
+          proxyBaseUrl: `${url.origin}${url.pathname.split('/proxy-service')[0]}/proxy-service`,
+          removeScripts: true,
+          inlineStyles: false
+        })
+      } else {
+        // Fall back to existing iframe processing
+        const modifiedHtml = modifyHtmlForProxy(htmlText, validatedUrl, sessionId, url.origin + url.pathname.split('/proxy-service')[0] + '/proxy-service')
+        responseBody = modifiedHtml
+      }
     } else if (contentType.includes('text/css')) {
       // Transform CSS content
       const cssText = await proxyResponse.text()
@@ -104,7 +358,30 @@ serve(async (req) => {
     }
 
     // Create response headers
-    const responseHeaders = createResponseHeaders(proxyResponse, responseTime)
+    const responseHeaders = ssrMode ? 
+      createSSRResponseHeaders(proxyResponse, endTime - startTime, cspMode) :
+      createResponseHeaders(proxyResponse, responseTime)
+
+    // Add telemetry for SSR mode usage
+    if (mode === 'authenticated' && sessionId && userId) {
+      try {
+        await supabase.from('usage_logs').insert({
+          user_id: userId,
+          session_id: sessionId,
+          event_type: 'proxy_mode',
+          metadata: {
+            mode: ssrMode ? 'ssr' : 'iframe',
+            csp_level: ssrMode ? cspMode : null,
+            url: validatedUrl,
+            response_time_ms: responseTime,
+            status_code: proxyResponse.status,
+            content_type: contentType
+          }
+        })
+      } catch (error) {
+        console.error('Failed to log SSR telemetry:', error)
+      }
+    }
 
     // Return the proxied response
     return new Response(responseBody, {

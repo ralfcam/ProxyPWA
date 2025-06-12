@@ -8,7 +8,7 @@ import { useAuth } from '../../hooks/useAuth'
 import { useUserProfile } from '../../hooks/useUserProfile'
 import { supabase } from '../../lib/supabase'
 import { extractDomain, isValidUrl, copyToClipboard, cn } from '../../lib/utils'
-import UnifiedProxyViewer from './UnifiedProxyViewer'
+import EnhancedUnifiedProxyViewer from './EnhancedUnifiedProxyViewer'
 
 interface ProxySession {
   id: string
@@ -318,11 +318,12 @@ const ProxyControl = () => {
   return (
     <>
       {showProxyViewer && activeSession && (
-        <UnifiedProxyViewer
+        <EnhancedUnifiedProxyViewer
           targetDomain={activeSession.target_domain}
           sessionId={activeSession.id}
           mode={useDirectProxy ? 'direct' : 'external'}
           onClose={() => setShowProxyViewer(false)}
+          experimentalSSR={true}  // Default to SSR mode
         />
       )}
       

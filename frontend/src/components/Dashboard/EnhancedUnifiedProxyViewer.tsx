@@ -2,90 +2,59 @@ import { useState, useEffect, useRef } from 'react'
 import { ArrowLeft, ArrowRight, RefreshCw, ExternalLink, AlertCircle, Shield, Globe, Settings2, Home } from 'lucide-react'
 import Button from '../ui/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card'
+import ProxyViewerWrapper from './ProxyViewerWrapper'
 
-/**
- * @deprecated Use EnhancedUnifiedProxyViewer instead for improved SSR capabilities and better CSP handling
- * This component is maintained for backward compatibility only
- */
-interface UnifiedProxyViewerProps {
+interface EnhancedUnifiedProxyViewerProps {
   targetDomain: string
   sessionId: string
   mode: 'direct' | 'external'
   onClose: () => void
   onNavigate?: (url: string) => void
+  experimentalSSR?: boolean // Enable experimental SSR mode
 }
 
-/**
- * @deprecated Use EnhancedUnifiedProxyViewer instead
- * Import it from './EnhancedUnifiedProxyViewer'
- * 
- * Migration example:
- * ```tsx
- * // Old (deprecated)
- * <UnifiedProxyViewer {...props} />
- * 
- * // New (recommended)
- * <EnhancedUnifiedProxyViewer {...props} experimentalSSR={true} />
- * ```
- */
-const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate }: UnifiedProxyViewerProps) => {
-  // Log deprecation warning in development
-  useEffect(() => {
-    if (process.env.NODE_ENV === 'development') {
-      console.warn(
-        '[DEPRECATION] UnifiedProxyViewer is deprecated. Please use EnhancedUnifiedProxyViewer instead for improved SSR capabilities and better CSP handling.'
-      )
-    }
-  }, [])
+const EnhancedUnifiedProxyViewer = ({ 
+  targetDomain, 
+  sessionId, 
+  mode, 
+  onClose, 
+  onNavigate,
+  experimentalSSR = true  // Default to true for SSR mode
+}: EnhancedUnifiedProxyViewerProps) => {
   const [currentUrl, setCurrentUrl] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
-  const [iframeKey, setIframeKey] = useState(0)
   const [showSettings, setShowSettings] = useState(false)
   const [urlHistory, setUrlHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(0)
-  const iframeRef = useRef<HTMLIFrameElement>(null)
+  const [useWebComponent, setUseWebComponent] = useState(true)  // Default to SSR mode
+  const [renderMode, setRenderMode] = useState<'iframe' | 'ssr' | 'auto'>('ssr')  // Default to SSR
+  const [cspLevel, setCspLevel] = useState<'permissive' | 'balanced' | 'strict'>('permissive')  // Default to permissive for better compatibility
   const urlInputRef = useRef<HTMLInputElement>(null)
-  
-  // Get the Supabase project URL from environment
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-  const isLocalDev = supabaseUrl.includes('localhost') || supabaseUrl.includes('127.0.0.1')
-  const proxyBaseUrl = isLocalDev 
-    ? 'http://localhost:54321/functions/v1/proxy-service'
-    : `${supabaseUrl}/functions/v1/proxy-service`
+  const viewerRef = useRef<any>(null)
   
   useEffect(() => {
     const url = targetDomain.startsWith('http') ? targetDomain : `https://${targetDomain}`
     setCurrentUrl(url)
-    // Initialize history with the first URL
     setUrlHistory([url])
     setHistoryIndex(0)
   }, [targetDomain])
-
-  const getProxyUrl = (url: string) => {
-    const encodedUrl = encodeURIComponent(url)
-    return `${proxyBaseUrl}/${sessionId}/${encodedUrl}`
-  }
 
   // Navigation functions
   const navigateTo = (url: string) => {
     setIsLoading(true)
     setError('')
     
-    // Ensure URL has protocol
     let targetUrl = url
     if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
       targetUrl = 'https://' + targetUrl
     }
 
-    // Update history
     const newHistory = [...urlHistory.slice(0, historyIndex + 1), targetUrl]
     setUrlHistory(newHistory)
     setHistoryIndex(newHistory.length - 1)
     
-    // Navigate
     setCurrentUrl(targetUrl)
-    setIframeKey(prev => prev + 1)
     onNavigate?.(targetUrl)
   }
 
@@ -96,7 +65,6 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
       setCurrentUrl(urlHistory[newIndex])
       setIsLoading(true)
       setError('')
-      setIframeKey(prev => prev + 1)
     }
   }
 
@@ -107,7 +75,6 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
       setCurrentUrl(urlHistory[newIndex])
       setIsLoading(true)
       setError('')
-      setIframeKey(prev => prev + 1)
     }
   }
 
@@ -118,10 +85,13 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
   const handleRefresh = () => {
     setIsLoading(true)
     setError('')
-    if (iframeRef.current) {
-      iframeRef.current.src = getProxyUrl(currentUrl) + (currentUrl.includes('?') ? '&' : '?') + 't=' + Date.now()
+    
+    // If using Web Component, call its refresh method
+    if (useWebComponent && viewerRef.current?.refresh) {
+      viewerRef.current.refresh()
     } else {
-      setIframeKey(prev => prev + 1)
+      // Force reload by updating key
+      setCurrentUrl(currentUrl + (currentUrl.includes('?') ? '&' : '?') + 't=' + Date.now())
     }
   }
 
@@ -136,61 +106,45 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
     window.open(currentUrl, '_blank')
   }
 
-  const handleIframeLoad = () => {
+  const handleProxyLoad = (event: { mode: string; url: string }) => {
     setIsLoading(false)
+    console.log('Proxy loaded:', event)
   }
 
-  const handleIframeError = () => {
+  const handleProxyError = (error: Error) => {
     setIsLoading(false)
-    setError('Failed to load page through proxy. The website may block proxy connections.')
+    setError(error.message)
   }
 
-  // Handle messages from iframe content
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      // Handle navigation requests from proxied content
-      if (event.data?.type === 'navigate' && event.data?.url) {
-        navigateTo(event.data.url)
-      }
-      
-      // Handle proxy ready signal
-      if (event.data?.type === 'proxy-ready') {
-        setIsLoading(false)
-      }
-      
-      // Handle proxy errors
-      if (event.data?.type === 'proxy-error') {
-        setError(event.data.message || 'Failed to load content through proxy')
-        setIsLoading(false)
-      }
+  const handleProxyNavigate = (url: string) => {
+    // Update URL history without triggering navigation
+    const newHistory = [...urlHistory.slice(0, historyIndex + 1), url]
+    setUrlHistory(newHistory)
+    setHistoryIndex(newHistory.length - 1)
+    setCurrentUrl(url)
+    
+    // Update input field
+    if (urlInputRef.current) {
+      urlInputRef.current.value = url
     }
-
-    window.addEventListener('message', handleMessage)
-    return () => window.removeEventListener('message', handleMessage)
-  }, [historyIndex, urlHistory])
+  }
 
   // Navigation button states
   const canGoBack = historyIndex > 0
   const canGoForward = historyIndex < urlHistory.length - 1
 
-  // External proxy services
-  const externalProxies = [
-    { name: 'Hide.me', url: 'https://hide.me/en/proxy' },
-    { name: 'ProxySite', url: 'https://www.proxysite.com/' },
-    { name: 'CroxyProxy', url: 'https://www.croxyproxy.com/' },
-    { name: 'KProxy', url: 'https://kproxy.com/' }
-  ]
-
-  const openExternalProxy = (proxyUrl: string) => {
-    window.open(proxyUrl, '_blank')
-  }
-
   // External proxy mode UI
   if (mode === 'external') {
+    const externalProxies = [
+      { name: 'Hide.me', url: 'https://hide.me/en/proxy' },
+      { name: 'ProxySite', url: 'https://www.proxysite.com/' },
+      { name: 'CroxyProxy', url: 'https://www.croxyproxy.com/' },
+      { name: 'KProxy', url: 'https://kproxy.com/' }
+    ]
+
     return (
       <div className="fixed inset-0 z-50 bg-background">
         <div className="flex flex-col h-full">
-          {/* Header */}
           <div className="border-b bg-background/95 backdrop-blur p-4">
             <div className="flex items-center justify-between">
               <Button onClick={onClose} variant="ghost" size="sm">
@@ -205,7 +159,6 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
             </div>
           </div>
 
-          {/* Content */}
           <div className="flex-1 overflow-y-auto p-6">
             <div className="max-w-4xl mx-auto space-y-6">
               <Card>
@@ -229,7 +182,7 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
                     {externalProxies.map((proxy) => (
                       <Button
                         key={proxy.name}
-                        onClick={() => openExternalProxy(proxy.url)}
+                        onClick={() => window.open(proxy.url, '_blank')}
                         variant="outline"
                         className="h-auto p-4 justify-start"
                       >
@@ -249,7 +202,7 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
     )
   }
 
-  // Direct proxy mode UI (enhanced with navigation features)
+  // Direct proxy mode UI with enhanced features
   return (
     <div className="fixed inset-0 z-50 bg-background">
       <div className="flex flex-col h-full">
@@ -267,6 +220,13 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
                 <Shield className="h-4 w-4 text-green-500" />
                 <span className="text-xs text-muted-foreground">Secure Proxy</span>
               </div>
+
+              {useWebComponent && (
+                <div className="flex items-center gap-1 ml-2">
+                  <Shield className="h-4 w-4 text-blue-500" />
+                  <span className="text-xs text-muted-foreground">SSR Mode Active</span>
+                </div>
+              )}
             </div>
             
             <div className="flex items-center gap-2">
@@ -354,6 +314,65 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
               </Button>
             </form>
           </div>
+
+          {/* Settings Panel */}
+          {showSettings && (
+            <div className="border-t bg-muted/50 p-3">
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-sm font-medium">
+                      <input
+                        type="checkbox"
+                        checked={useWebComponent}
+                        onChange={(e) => setUseWebComponent(e.target.checked)}
+                        className="rounded"
+                      />
+                      <span>Enhanced SSR Mode</span>
+                      <Shield className="h-3 w-3 text-blue-500" />
+                    </label>
+
+                    {useWebComponent && (
+                      <>
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="text-muted-foreground">Render Mode:</span>
+                          <select 
+                            value={renderMode} 
+                            onChange={(e) => setRenderMode(e.target.value as any)}
+                            className="text-xs border rounded px-2 py-1 bg-background"
+                          >
+                            <option value="auto">Auto-detect</option>
+                            <option value="ssr">Force SSR</option>
+                            <option value="iframe">Force Iframe</option>
+                          </select>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="text-muted-foreground">Security:</span>
+                          <select 
+                            value={cspLevel} 
+                            onChange={(e) => setCspLevel(e.target.value as any)}
+                            className="text-xs border rounded px-2 py-1 bg-background"
+                          >
+                            <option value="permissive">Permissive (Recommended)</option>
+                            <option value="balanced">Balanced</option>
+                            <option value="strict">Strict</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+                
+                {useWebComponent && (
+                  <div className="text-xs text-muted-foreground pl-6">
+                    SSR mode processes content server-side to bypass iframe restrictions. 
+                    Use "Permissive" security for maximum compatibility.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Security Notice */}
@@ -363,34 +382,13 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
               <Shield className="h-4 w-4 flex-shrink-0" />
               <span>Secure proxy connection • Session: {sessionId.slice(0, 8)}...</span>
             </div>
-            {showSettings && (
-              <div className="text-xs text-muted-foreground">
-                Advanced settings coming soon...
-              </div>
-            )}
           </div>
         </div>
 
         {/* Content Area */}
         <div className="flex-1 relative bg-muted">
-          {/* Loading Overlay */}
-          {isLoading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-10">
-              <div className="flex flex-col items-center gap-3">
-                <div className="relative">
-                  <div className="w-12 h-12 border-3 border-primary/20 rounded-full" />
-                  <div className="w-12 h-12 border-3 border-primary border-t-transparent rounded-full animate-spin absolute inset-0" />
-                </div>
-                <div className="text-center">
-                  <p className="text-sm font-medium">Loading through secure proxy...</p>
-                  <p className="text-xs text-muted-foreground mt-1">{currentUrl}</p>
-                </div>
-              </div>
-            </div>
-          )}
-          
           {/* Error Display */}
-          {error && (
+          {error && !useWebComponent && (
             <div className="absolute inset-0 flex items-center justify-center bg-background z-10">
               <Card className="max-w-md">
                 <CardHeader>
@@ -406,8 +404,9 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
                     <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
                       <li>Check if the URL is correct</li>
                       <li>Try refreshing the page</li>
-                      <li>Switch to external proxy mode</li>
-                      <li>Some sites block all proxy connections</li>
+                      <li>Switch render mode to "Force Iframe" in settings</li>
+                      <li>Try a more permissive security level</li>
+                      <li>Use external proxy mode for problematic sites</li>
                     </ul>
                   </div>
                   
@@ -424,20 +423,35 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
             </div>
           )}
           
-          {/* Proxy Iframe */}
-          {!error && (
-            <iframe
-              ref={iframeRef}
-              key={iframeKey}
-              src={getProxyUrl(currentUrl)}
-              className="w-full h-full border-0"
-              onLoad={handleIframeLoad}
-              onError={handleIframeError}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation allow-top-navigation-by-user-activation allow-pointer-lock allow-orientation-lock"
-              allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; microphone; payment; autoplay; fullscreen; picture-in-picture; xr-spatial-tracking; clipboard-read; clipboard-write"
-              referrerPolicy="no-referrer-when-downgrade"
-              title={`Secure proxy session for ${currentUrl}`}
+          {/* Proxy Content */}
+          {useWebComponent ? (
+            <ProxyViewerWrapper
+              ref={viewerRef}
+              targetUrl={currentUrl}
+              sessionId={sessionId}
+              mode={renderMode}
+              cspLevel={cspLevel}
+              fallbackEnabled={true}
+              onNavigate={handleProxyNavigate}
+              onLoad={handleProxyLoad}
+              onError={handleProxyError}
+              className="w-full h-full"
             />
+          ) : (
+            // Legacy iframe implementation
+            !error && (
+              <iframe
+                key={currentUrl}
+                src={`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/proxy-service/${sessionId}/${encodeURIComponent(currentUrl)}`}
+                className="w-full h-full border-0"
+                onLoad={() => setIsLoading(false)}
+                onError={() => setError('Failed to load page through proxy. The website may block proxy connections.')}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation allow-top-navigation-by-user-activation allow-pointer-lock allow-orientation-lock"
+                allow="accelerometer; camera; encrypted-media; geolocation; gyroscope; microphone; payment; autoplay; fullscreen; picture-in-picture; xr-spatial-tracking; clipboard-read; clipboard-write"
+                referrerPolicy="no-referrer-when-downgrade"
+                title={`Secure proxy session for ${currentUrl}`}
+              />
+            )
           )}
         </div>
 
@@ -447,6 +461,7 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
             <div className="flex items-center gap-4">
               <span>Proxy Active</span>
               <span>Session: {sessionId.slice(0, 8)}...</span>
+              {useWebComponent && <span>Mode: {renderMode.toUpperCase()}</span>}
             </div>
             <div className="flex items-center gap-4">
               <span>Target: {currentUrl}</span>
@@ -459,4 +474,4 @@ const UnifiedProxyViewer = ({ targetDomain, sessionId, mode, onClose, onNavigate
   )
 }
 
-export default UnifiedProxyViewer 
+export default EnhancedUnifiedProxyViewer 

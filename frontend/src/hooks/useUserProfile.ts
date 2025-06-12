@@ -6,12 +6,18 @@ interface UserProfile {
   id: string
   email: string
   full_name?: string
+  display_name?: string
+  phone?: string
+  location?: string
   time_balance_minutes: number
   subscription_status: string
   subscription_tier: string
   max_concurrent_sessions: number
   total_bytes_used: number
   last_activity_at?: string
+  last_topup_at?: string
+  created_at?: string
+  updated_at?: string
 }
 
 export const useUserProfile = () => {

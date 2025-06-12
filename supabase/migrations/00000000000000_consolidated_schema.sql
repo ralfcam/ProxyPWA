@@ -487,7 +487,7 @@ BEGIN
     SELECT 
       COUNT(*) AS session_count,
       SUM(EXTRACT(epoch FROM (COALESCE(ended_at, now()) - started_at))/60) AS total_minutes,
-      SUM(bytes_transferred) AS total_bytes,
+      SUM(bytes_transferred) AS bytes_total,
       SUM(requests_count) AS total_requests,
       AVG(EXTRACT(epoch FROM (COALESCE(ended_at, now()) - started_at))/60) AS avg_duration
     FROM public.proxy_sessions
@@ -499,14 +499,14 @@ BEGIN
       jsonb_build_object(
         'domain', target_domain,
         'sessions', session_count,
-        'bytes', total_bytes
+        'bytes', domain_bytes
       ) ORDER BY session_count DESC
     ) AS domains
     FROM (
       SELECT 
         target_domain,
         COUNT(*) AS session_count,
-        SUM(bytes_transferred) AS total_bytes
+        SUM(bytes_transferred) AS domain_bytes
       FROM public.proxy_sessions
       WHERE user_id = user_uuid
         AND started_at >= now() - (days_back || ' days')::interval
@@ -515,12 +515,12 @@ BEGIN
     ) d
   )
   SELECT 
-    ss.session_count,
+    ss.session_count AS total_sessions,
     ss.total_minutes,
-    ss.total_bytes,
+    ss.bytes_total AS total_bytes,
     ss.total_requests,
-    ss.avg_duration,
-    ds.domains
+    ss.avg_duration AS avg_session_duration,
+    ds.domains AS top_domains
   FROM session_stats ss
   CROSS JOIN domain_stats ds;
 END;

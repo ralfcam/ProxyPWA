@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react'
-import { supabase } from '../../lib/supabase'
 
 // Import the Web Component
 import './ProxyViewerWebComponent'

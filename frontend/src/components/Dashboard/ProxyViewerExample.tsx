@@ -18,7 +18,7 @@ const ProxyViewerExample = () => {
           targetDomain={targetUrl}
           sessionId={sessionId}
           mode="direct"
-          experimentalSSR={true} // Enable SSR by default
+
           onClose={() => setShowProxy(false)}
           onNavigate={(url) => console.log('Navigated to:', url)}
         />

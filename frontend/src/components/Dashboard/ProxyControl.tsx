@@ -323,7 +323,6 @@ const ProxyControl = () => {
           sessionId={activeSession.id}
           mode={useDirectProxy ? 'direct' : 'external'}
           onClose={() => setShowProxyViewer(false)}
-          experimentalSSR={true}  // Default to SSR mode
         />
       )}
       

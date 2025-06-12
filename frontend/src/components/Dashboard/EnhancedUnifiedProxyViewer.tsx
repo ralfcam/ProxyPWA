@@ -10,7 +10,6 @@ interface EnhancedUnifiedProxyViewerProps {
   mode: 'direct' | 'external'
   onClose: () => void
   onNavigate?: (url: string) => void
-  experimentalSSR?: boolean // Enable experimental SSR mode
 }
 
 const EnhancedUnifiedProxyViewer = ({ 
@@ -18,8 +17,7 @@ const EnhancedUnifiedProxyViewer = ({
   sessionId, 
   mode, 
   onClose, 
-  onNavigate,
-  experimentalSSR = true  // Default to true for SSR mode
+  onNavigate
 }: EnhancedUnifiedProxyViewerProps) => {
   const [currentUrl, setCurrentUrl] = useState('')
   const [isLoading, setIsLoading] = useState(false)

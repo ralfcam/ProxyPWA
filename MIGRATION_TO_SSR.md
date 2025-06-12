@@ -48,25 +48,33 @@ As of v2.0, the proxy service defaults to **Server-Side Rendering (SSR) mode** f
 The new component accepts the same props, but SSR is enabled by default:
 
 ```tsx
-// Old way (if you were testing SSR)
-<EnhancedUnifiedProxyViewer experimentalSSR={true} />
-
-// New way (SSR is default)
-<EnhancedUnifiedProxyViewer />
-```
-
-## Configuration Options
-
-### Disable SSR (Use Legacy Iframe Mode)
-
-If you need to force iframe mode:
-
-```tsx
+// The component now uses SSR by default
 <EnhancedUnifiedProxyViewer
   targetDomain={domain}
   sessionId={sessionId}
   mode="direct"
-  experimentalSSR={false}  // Explicitly disable SSR
+  onClose={handleClose}
+/>
+```
+
+## Configuration Options
+
+### Control SSR Mode
+
+SSR mode can be controlled through the settings panel at runtime. If you need to force a specific mode:
+
+1. Click the settings icon (⚙️)
+2. Choose render mode:
+   - Auto-detect (default)
+   - Force SSR
+   - Force Iframe
+
+```tsx
+// The component handles mode switching internally
+<EnhancedUnifiedProxyViewer
+  targetDomain={domain}
+  sessionId={sessionId}
+  mode="direct"
   onClose={handleClose}
 />
 ```

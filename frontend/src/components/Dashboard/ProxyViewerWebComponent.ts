@@ -107,6 +107,53 @@ export class ProxyViewerElement extends HTMLElement {
         height: 100%;
         border: none;
         overflow: auto;
+        position: relative;
+        background: white;
+      }
+      
+      /* SSR Content Isolation */
+      .ssr-wrapper {
+        width: 100%;
+        min-height: 100%;
+        position: relative;
+        overflow: hidden;
+        /* Create a new stacking context */
+        isolation: isolate;
+      }
+      
+      .ssr-body {
+        position: relative;
+        width: 100%;
+        /* Contain floats and margins */
+        overflow: hidden;
+      }
+      
+      /* Reset styles for SSR content to prevent inheritance */
+      .ssr-body * {
+        /* Ensure content stays within bounds */
+        max-width: 100% !important;
+        position: relative !important;
+      }
+      
+      /* Prevent fixed positioning from breaking out */
+      .ssr-body *[style*="position: fixed"],
+      .ssr-body *[style*="position:fixed"] {
+        position: absolute !important;
+      }
+      
+      /* Scope link styles to SSR content */
+      .ssr-content a {
+        cursor: pointer;
+        text-decoration: underline;
+      }
+      
+      .ssr-content a:hover {
+        opacity: 0.8;
+      }
+      
+      /* Ensure forms in SSR content are interactive */
+      .ssr-content form {
+        pointer-events: auto;
       }
       
       .mode-toggle {
@@ -317,8 +364,29 @@ export class ProxyViewerElement extends HTMLElement {
       }))
     }
     
+    // Parse the HTML content to extract body and styles
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(content, 'text/html')
+    
+    // Extract styles from head to preserve styling
+    const styles = Array.from(doc.querySelectorAll('style, link[rel="stylesheet"]'))
+    const styleContent = styles.map(el => el.outerHTML).join('\n')
+    
+    // Extract body content
+    const bodyContent = doc.body ? doc.body.innerHTML : content
+    
+    // Create a container that preserves styles but contains the content
+    const processedContent = `
+      <div class="ssr-wrapper" data-origin="${this.config.src}">
+        ${styleContent}
+        <div class="ssr-body">
+          ${bodyContent}
+        </div>
+      </div>
+    `
+    
     // Process content to optimize resource hints
-    const optimizedContent = this.processResourceHints(content)
+    const optimizedContent = this.processResourceHints(processedContent)
     
     // Create content container for SSR
     const ssrContainer = document.createElement('div')
@@ -375,33 +443,83 @@ export class ProxyViewerElement extends HTMLElement {
       
       if (link && link.href) {
         event.preventDefault()
+        event.stopPropagation()
         
         try {
-          const linkUrl = new URL(link.href)
-          const currentOrigin = new URL(this.config.src).origin
+          // Get the href attribute to handle relative URLs
+          const hrefAttr = link.getAttribute('href')
+          if (!hrefAttr) return
           
-          // Check if it's a safe navigation
-          if (linkUrl.origin === currentOrigin || 
-              linkUrl.protocol === 'https:' || 
-              linkUrl.protocol === 'http:') {
-            
-            let navigationUrl = link.href
-            
-            // Extract original URL from proxied link if needed
-            if (linkUrl.pathname.includes('/proxy-service/')) {
-              const pathParts = linkUrl.pathname.split('/')
-              const proxyIndex = pathParts.findIndex(part => part === 'proxy-service')
-              if (proxyIndex !== -1 && pathParts.length > proxyIndex + 2) {
-                navigationUrl = decodeURIComponent(pathParts.slice(proxyIndex + 2).join('/'))
-              }
-            }
-            
-            this.navigateTo(navigationUrl)
+          let navigationUrl: string
+          
+          // Handle different URL types
+          if (hrefAttr.startsWith('http://') || hrefAttr.startsWith('https://')) {
+            // Absolute URL
+            navigationUrl = hrefAttr
+          } else if (hrefAttr.startsWith('//')) {
+            // Protocol-relative URL
+            const protocol = new URL(this.config.src).protocol
+            navigationUrl = protocol + hrefAttr
+          } else if (hrefAttr.startsWith('/')) {
+            // Absolute path
+            const origin = new URL(this.config.src).origin
+            navigationUrl = origin + hrefAttr
+          } else if (hrefAttr.startsWith('#')) {
+            // Hash navigation - don't navigate
+            return
           } else {
-            console.warn('Cross-origin navigation blocked for security:', link.href)
+            // Relative path - resolve against current target URL
+            navigationUrl = new URL(hrefAttr, this.config.src).href
+          }
+          
+          console.log('SSR Navigation:', {
+            original: hrefAttr,
+            resolved: navigationUrl,
+            currentUrl: this.config.src
+          })
+          
+          // Navigate through proxy
+          this.navigateTo(navigationUrl)
+          
+        } catch (error) {
+          console.error('Navigation error:', error)
+        }
+      }
+    })
+
+    // Also intercept form submissions
+    container.addEventListener('submit', (event) => {
+      const form = event.target as HTMLFormElement
+      if (form && form.action) {
+        event.preventDefault()
+        
+        try {
+          // Resolve form action URL
+          const actionAttr = form.getAttribute('action') || ''
+          let actionUrl: string
+          
+          if (actionAttr.startsWith('http://') || actionAttr.startsWith('https://')) {
+            actionUrl = actionAttr
+          } else if (actionAttr.startsWith('/')) {
+            const origin = new URL(this.config.src).origin
+            actionUrl = origin + actionAttr
+          } else {
+            actionUrl = new URL(actionAttr, this.config.src).href
+          }
+          
+          // Handle GET forms by constructing URL with query params
+          if (form.method.toLowerCase() === 'get') {
+            const formData = new FormData(form)
+            const params = new URLSearchParams(formData as any)
+            const separator = actionUrl.includes('?') ? '&' : '?'
+            this.navigateTo(actionUrl + separator + params.toString())
+          } else {
+            // For POST forms, just navigate to the action URL
+            // (Full POST support would require more complex handling)
+            this.navigateTo(actionUrl)
           }
         } catch (error) {
-          console.error('Invalid navigation URL:', error)
+          console.error('Form submission error:', error)
         }
       }
     })

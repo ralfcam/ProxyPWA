@@ -8,17 +8,8 @@ import { useAuth } from '../../hooks/useAuth'
 import { useUserProfile } from '../../hooks/useUserProfile'
 import { supabase } from '../../lib/supabase'
 import { extractDomain, isValidUrl, copyToClipboard, cn } from '../../lib/utils'
-import EnhancedUnifiedProxyViewer from './EnhancedUnifiedProxyViewer'
-
-interface ProxySession {
-  id: string
-  target_domain: string
-  session_url: string
-  status: 'active' | 'expired' | 'terminated' | 'error'
-  started_at: string
-  bytes_transferred: number
-  requests_count: number
-}
+import ProxyViewer from './ProxyViewer'
+import { ProxySession } from './types'
 
 // Balance Alert Component
 const BalanceAlert = ({ balance }: { balance: number }) => {
@@ -318,7 +309,7 @@ const ProxyControl = () => {
   return (
     <>
       {showProxyViewer && activeSession && (
-        <EnhancedUnifiedProxyViewer
+        <ProxyViewer
           targetDomain={activeSession.target_domain}
           sessionId={activeSession.id}
           mode={useDirectProxy ? 'direct' : 'external'}

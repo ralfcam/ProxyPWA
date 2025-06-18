@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, ExternalLink, AlertCircle, Shield, Settings2, Globe, ArrowRight, RefreshCw, Home } from 'lucide-react'
+import { ArrowLeft, ExternalLink, AlertCircle, Shield, Settings2 } from 'lucide-react'
 import Button from '../ui/Button'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card'
 import ProxyViewerWrapper from './ProxyViewerWrapper'
@@ -8,7 +8,7 @@ import { ExternalProxyMode } from './components/ExternalProxyMode'
 import { ProxyNavigationBar } from './components/ProxyNavigationBar'
 import { ProxyViewerProps, RenderMode, SecurityLevel } from './types'
 
-const EnhancedUnifiedProxyViewer = ({ 
+const ProxyViewer = ({ 
   targetDomain, 
   sessionId, 
   mode, 
@@ -20,24 +20,6 @@ const EnhancedUnifiedProxyViewer = ({
   const [renderMode, setRenderMode] = useState<RenderMode>('ssr')  // Default to SSR
   const [cspLevel, setCspLevel] = useState<SecurityLevel>('permissive')  // Default to permissive for better compatibility
   const [streamingOptimization, setStreamingOptimization] = useState(true)
-  
-  // BrowserQL-specific state variables
-  const [renderQuality, setRenderQuality] = useState<'fast' | 'balanced' | 'complete'>('balanced')
-  const [browserqlOptions, setBrowserqlOptions] = useState({
-    bypassBot: true,
-    useProxy: true,
-    proxyCountry: 'nl',
-    solveCaptcha: false
-  })
-
-  const [browserqlMetrics, setBrowserqlMetrics] = useState({
-    renderTime: 0,
-    renderer: 'unknown',
-    botDetectionBypassed: false,
-    captchaSolved: false,
-    cloudflareFound: false,
-    region: 'amsterdam-europe'
-  })
   
   const {
     currentUrl,
@@ -84,25 +66,13 @@ const EnhancedUnifiedProxyViewer = ({
         }))
       }
 
-      const handleBrowserQLMetadata = (event: CustomEvent) => {
-        const metadata = event.detail
-        if (metadata) {
-          setBrowserqlMetrics(prev => ({
-            ...prev,
-            ...metadata
-          }))
-        }
-      }
-
       viewerRef.current.addEventListener('video-optimized', handleVideoOptimized)
       viewerRef.current.addEventListener('resource-optimized', handleResourceOptimized)
-      viewerRef.current.addEventListener('browserql-metadata', handleBrowserQLMetadata)
       
       return () => {
         if (viewerRef.current) {
           viewerRef.current.removeEventListener('video-optimized', handleVideoOptimized)
           viewerRef.current.removeEventListener('resource-optimized', handleResourceOptimized)
-          viewerRef.current.removeEventListener('browserql-metadata', handleBrowserQLMetadata)
         }
       }
     }
@@ -150,70 +120,12 @@ const EnhancedUnifiedProxyViewer = ({
 
   // External proxy mode UI
   if (mode === 'external') {
-    const externalProxies = [
-      { name: 'Hide.me', url: 'https://hide.me/en/proxy' },
-      { name: 'ProxySite', url: 'https://www.proxysite.com/' },
-      { name: 'CroxyProxy', url: 'https://www.croxyproxy.com/' },
-      { name: 'KProxy', url: 'https://kproxy.com/' }
-    ]
-
     return (
-      <div className="fixed inset-0 z-50 bg-background">
-        <div className="flex flex-col h-full">
-          <div className="border-b bg-background/95 backdrop-blur p-4">
-            <div className="flex items-center justify-between">
-              <Button onClick={onClose} variant="ghost" size="sm">
-                <ArrowLeft className="h-4 w-4 mr-2" />
-                Back to Dashboard
-              </Button>
-              
-              <Button onClick={handleOpenOriginal} variant="outline" size="sm">
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Open Original
-              </Button>
-            </div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-6">
-            <div className="max-w-4xl mx-auto space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Globe className="h-5 w-5" />
-                    External Proxy Services
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                    <h4 className="font-medium mb-2">How to use:</h4>
-                    <ol className="list-decimal list-inside space-y-1 text-sm">
-                      <li>Click on a proxy service below</li>
-                      <li>Paste this URL: <code className="bg-muted px-1 rounded">{currentUrl}</code></li>
-                      <li>Click the proxy's "Go" button</li>
-                    </ol>
-                  </div>
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    {externalProxies.map((proxy) => (
-                      <Button
-                        key={proxy.name}
-                        onClick={() => window.open(proxy.url, '_blank')}
-                        variant="outline"
-                        className="h-auto p-4 justify-start"
-                      >
-                        <div>
-                          <p className="font-medium">{proxy.name}</p>
-                          <p className="text-xs text-muted-foreground">Click to open</p>
-                        </div>
-                      </Button>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        </div>
-      </div>
+      <ExternalProxyMode
+        currentUrl={currentUrl}
+        onClose={onClose}
+        onOpenOriginal={handleOpenOriginal}
+      />
     )
   }
 
@@ -264,71 +176,18 @@ const EnhancedUnifiedProxyViewer = ({
           </div>
 
           {/* Navigation Bar */}
-          <div className="flex items-center gap-2 p-3">
-            {/* Navigation Buttons */}
-            <div className="flex items-center gap-1">
-              <Button
-                onClick={handleGoBack}
-                variant="ghost"
-                size="sm"
-                disabled={!canGoBack}
-                className="px-2"
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-              
-              <Button
-                onClick={handleGoForward}
-                variant="ghost"
-                size="sm"
-                disabled={!canGoForward}
-                className="px-2"
-              >
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-              
-              <Button
-                onClick={handleRefresh}
-                variant="ghost"
-                size="sm"
-                disabled={isLoading}
-                className="px-2"
-              >
-                <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-              </Button>
-              
-              <Button
-                onClick={handleGoHome}
-                variant="ghost"
-                size="sm"
-                className="px-2"
-              >
-                <Home className="h-4 w-4" />
-              </Button>
-            </div>
-
-            {/* URL Bar */}
-            <form onSubmit={handleNavigate} className="flex-1 flex items-center gap-2">
-              <div className="flex-1 relative">
-                <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <input
-                  ref={urlInputRef}
-                  type="text"
-                  defaultValue={currentUrl}
-                  className="w-full pl-10 pr-3 py-1.5 text-sm bg-muted rounded-md border border-border focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-                  placeholder="Enter URL..."
-                  onFocus={(e) => e.target.select()}
-                />
-              </div>
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-              >
-                Go
-              </Button>
-            </form>
-          </div>
+          <ProxyNavigationBar
+            currentUrl={currentUrl}
+            canGoBack={canGoBack}
+            canGoForward={canGoForward}
+            isLoading={isLoading}
+            urlInputRef={urlInputRef}
+            onGoBack={handleGoBack}
+            onGoForward={handleGoForward}
+            onRefresh={handleRefresh}
+            onGoHome={handleGoHome}
+            onNavigate={handleNavigate}
+          />
 
           {/* Settings Panel */}
           {showSettings && (
@@ -397,81 +256,6 @@ const EnhancedUnifiedProxyViewer = ({
                     Use "Permissive" security for maximum compatibility.
                     {streamingOptimization && ' Streaming optimization reduces preload warnings for video content by using lazy loading strategies.'}
                   </div>
-                )}
-
-                {useWebComponent && renderMode === 'ssr' && (
-                  <>
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="text-muted-foreground">Render Quality:</span>
-                      <select 
-                        value={renderQuality} 
-                        onChange={(e) => setRenderQuality(e.target.value as any)}
-                        className="text-xs border rounded px-2 py-1 bg-background ml-2"
-                      >
-                        <option value="fast">Fast (15s, basic bypass)</option>
-                        <option value="balanced">Balanced (30s, bot bypass)</option>
-                        <option value="complete">Complete (60s, bot + CAPTCHA)</option>
-                      </select>
-                    </div>
-                    
-                    <div className="flex items-center gap-4 mt-2">
-                      <label className="flex items-center gap-2 text-sm font-medium">
-                        <input
-                          type="checkbox"
-                          checked={browserqlOptions.bypassBot}
-                          onChange={(e) => setBrowserqlOptions(prev => ({ ...prev, bypassBot: e.target.checked }))}
-                          className="rounded"
-                        />
-                        <span>Bypass Bot Detection</span>
-                      </label>
-                      
-                      <label className="flex items-center gap-2 text-sm font-medium">
-                        <input
-                          type="checkbox"
-                          checked={browserqlOptions.useProxy}
-                          onChange={(e) => setBrowserqlOptions(prev => ({ ...prev, useProxy: e.target.checked }))}
-                          className="rounded"
-                        />
-                        <span>Use Residential Proxy</span>
-                      </label>
-                      
-                      {browserqlOptions.useProxy && (
-                        <div className="flex items-center gap-2 text-sm">
-                          <span className="text-muted-foreground">Proxy Country:</span>
-                          <select 
-                            value={browserqlOptions.proxyCountry} 
-                            onChange={(e) => setBrowserqlOptions(prev => ({ ...prev, proxyCountry: e.target.value }))}
-                            className="text-xs border rounded px-2 py-1 bg-background ml-2"
-                          >
-                            <option value="nl">Netherlands</option>
-                            <option value="us">United States</option>
-                            <option value="gb">United Kingdom</option>
-                            <option value="de">Germany</option>
-                            <option value="fr">France</option>
-                            <option value="ca">Canada</option>
-                          </select>
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="text-xs text-muted-foreground mt-2">
-                      BrowserQL provides advanced bot detection bypass using GraphQL-based browser automation.
-                      {renderQuality === 'complete' && ' Complete mode includes CAPTCHA solving capabilities.'}
-                    </div>
-                    
-                    {browserqlMetrics.renderTime > 0 && (
-                      <div className="mt-3 p-2 bg-green-100 dark:bg-green-900/30 rounded text-xs">
-                        ✓ BrowserQL Rendering Complete
-                        <div className="flex flex-wrap gap-2 mt-1 text-xs">
-                          <span>Region: {browserqlMetrics.region}</span>
-                          <span>Render Time: {browserqlMetrics.renderTime}ms</span>
-                          {browserqlMetrics.botDetectionBypassed && <span>🛡️ Bot Detection Bypassed</span>}
-                          {browserqlMetrics.captchaSolved && <span>🔐 CAPTCHA Solved</span>}
-                          {browserqlMetrics.cloudflareFound && <span>☁️ Cloudflare Detected & Handled</span>}
-                        </div>
-                      </div>
-                    )}
-                  </>
                 )}
 
                 {useWebComponent && (
@@ -573,10 +357,6 @@ const EnhancedUnifiedProxyViewer = ({
               mode={renderMode}
               cspLevel={cspLevel}
               fallbackEnabled={true}
-              renderQuality={renderQuality}
-              bypassBot={browserqlOptions.bypassBot}
-              useProxy={browserqlOptions.useProxy}
-              proxyCountry={browserqlOptions.proxyCountry}
               onNavigate={handleProxyNavigate}
               onLoad={handleProxyLoad}
               onError={handleProxyError}
@@ -629,4 +409,4 @@ const EnhancedUnifiedProxyViewer = ({
   )
 }
 
-export default EnhancedUnifiedProxyViewer 
+export default ProxyViewer 

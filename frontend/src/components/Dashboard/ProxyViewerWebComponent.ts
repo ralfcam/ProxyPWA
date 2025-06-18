@@ -1,10 +1,4 @@
-interface ProxyComponentConfig {
-  src: string
-  sessionId?: string
-  mode: 'iframe' | 'ssr'
-  cspLevel: 'permissive' | 'balanced' | 'strict'
-  fallbackEnabled: boolean
-}
+import { ProxyComponentConfig } from './types'
 
 export class ProxyViewerElement extends HTMLElement {
   private shadow: ShadowRoot
@@ -16,7 +10,7 @@ export class ProxyViewerElement extends HTMLElement {
   
   // Observed attributes for reactive updates
   static get observedAttributes(): string[] {
-    return ['src', 'session-id', 'mode', 'csp-level', 'fallback-enabled']
+    return ['src', 'session-id', 'mode', 'csp-level', 'fallback-enabled', 'render-quality', 'bypass-bot', 'use-proxy', 'proxy-country']
   }
 
   constructor() {
@@ -306,13 +300,36 @@ export class ProxyViewerElement extends HTMLElement {
     
     const content = await response.text()
     
+    // Extract BrowserQL metadata from response headers
+    const browserqlMetadata: any = {}
+    if (response.headers.get('X-Renderer') === 'browserql-graphql') {
+      browserqlMetadata.renderer = 'browserql-graphql'
+      browserqlMetadata.renderTime = parseInt(response.headers.get('X-Render-Time') || '0')
+      browserqlMetadata.region = response.headers.get('X-Region') || 'unknown'
+      browserqlMetadata.botDetectionBypassed = response.headers.get('X-Bot-Detection-Bypassed') === 'true'
+      browserqlMetadata.captchaSolved = response.headers.get('X-Captcha-Solved') === 'true'
+      browserqlMetadata.cloudflareFound = response.headers.get('X-Cloudflare-Found') === 'true'
+      
+      // Dispatch BrowserQL metadata event
+      this.dispatchEvent(new CustomEvent('browserql-metadata', {
+        detail: browserqlMetadata,
+        bubbles: true
+      }))
+    }
+    
+    // Process content to optimize resource hints
+    const optimizedContent = this.processResourceHints(content)
+    
     // Create content container for SSR
     const ssrContainer = document.createElement('div')
     ssrContainer.className = 'ssr-content'
-    ssrContainer.innerHTML = content
+    ssrContainer.innerHTML = optimizedContent
     
     // Handle navigation within SSR content
     this.setupSSRNavigation(ssrContainer)
+    
+    // Set up lazy loading for videos
+    this.setupVideoLazyLoading(ssrContainer)
     
     this.contentContainer.innerHTML = ''
     this.contentContainer.appendChild(ssrContainer)
@@ -359,20 +376,46 @@ export class ProxyViewerElement extends HTMLElement {
       if (link && link.href) {
         event.preventDefault()
         
-        // Extract original URL from proxied link
-        const linkUrl = new URL(link.href)
-        let navigationUrl = link.href
-        
-        // Check if it's a proxied URL and extract the original
-        if (linkUrl.pathname.includes('/proxy-service/')) {
-          const pathParts = linkUrl.pathname.split('/')
-          const proxyIndex = pathParts.findIndex(part => part === 'proxy-service')
-          if (proxyIndex !== -1 && pathParts.length > proxyIndex + 2) {
-            navigationUrl = decodeURIComponent(pathParts.slice(proxyIndex + 2).join('/'))
+        try {
+          const linkUrl = new URL(link.href)
+          const currentOrigin = new URL(this.config.src).origin
+          
+          // Check if it's a safe navigation
+          if (linkUrl.origin === currentOrigin || 
+              linkUrl.protocol === 'https:' || 
+              linkUrl.protocol === 'http:') {
+            
+            let navigationUrl = link.href
+            
+            // Extract original URL from proxied link if needed
+            if (linkUrl.pathname.includes('/proxy-service/')) {
+              const pathParts = linkUrl.pathname.split('/')
+              const proxyIndex = pathParts.findIndex(part => part === 'proxy-service')
+              if (proxyIndex !== -1 && pathParts.length > proxyIndex + 2) {
+                navigationUrl = decodeURIComponent(pathParts.slice(proxyIndex + 2).join('/'))
+              }
+            }
+            
+            this.navigateTo(navigationUrl)
+          } else {
+            console.warn('Cross-origin navigation blocked for security:', link.href)
           }
+        } catch (error) {
+          console.error('Invalid navigation URL:', error)
         }
-        
-        this.navigateTo(navigationUrl)
+      }
+    })
+
+    // Listen for cross-origin error messages from monitored content
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'cross-origin-error') {
+        this.dispatchEvent(new CustomEvent('resource-optimized', {
+          detail: { 
+            type: 'crossOriginBlocked', 
+            count: 1,
+            message: event.data.message 
+          }
+        }))
       }
     })
   }
@@ -392,6 +435,25 @@ export class ProxyViewerElement extends HTMLElement {
     if (options.ssr) {
       params.set('ssr', 'true')
       params.set('csp', this.config.cspLevel)
+      
+      // Add BrowserQL parameters
+      const renderQuality = this.getAttribute('render-quality')
+      const bypassBot = this.getAttribute('bypass-bot')
+      const useProxy = this.getAttribute('use-proxy')
+      const proxyCountry = this.getAttribute('proxy-country')
+      
+      if (renderQuality) {
+        params.set('quality', renderQuality)
+      }
+      if (bypassBot) {
+        params.set('bypass', bypassBot)
+      }
+      if (useProxy) {
+        params.set('proxy', useProxy)
+      }
+      if (proxyCountry) {
+        params.set('country', proxyCountry)
+      }
     }
     
     return params.toString() ? `${url}${url.includes('?') ? '&' : '?'}${params}` : url
@@ -451,6 +513,247 @@ export class ProxyViewerElement extends HTMLElement {
       this.iframe.remove()
       this.iframe = null
     }
+  }
+
+  private processResourceHints(content: string): string {
+    const tempDoc = new DOMParser().parseFromString(content, 'text/html')
+    
+    // Enhanced resource processing
+    this.optimizePreloads(tempDoc)
+    this.sanitizeCrossOriginResources(tempDoc)
+    this.addResourceMonitoring(tempDoc)
+    
+    return tempDoc.documentElement.outerHTML
+  }
+
+  private sanitizeCrossOriginResources(doc: Document): void {
+    const currentOrigin = window.location.origin
+    let blockedCount = 0
+
+    // Monitor and block problematic cross-origin scripts
+    const scripts = doc.querySelectorAll('script[src]')
+    scripts.forEach(script => {
+      const src = script.getAttribute('src')
+      if (src) {
+        try {
+          const url = new URL(src, this.config.src)
+          if (url.origin !== new URL(this.config.src).origin && 
+              url.origin !== currentOrigin) {
+            script.setAttribute('data-blocked', 'cross-origin')
+            script.removeAttribute('src')
+            blockedCount++
+          }
+        } catch (error) {
+          script.remove()
+          blockedCount++
+        }
+      }
+    })
+
+    // Dispatch optimization event
+    if (blockedCount > 0) {
+      this.dispatchEvent(new CustomEvent('resource-optimized', {
+        detail: { type: 'crossOriginBlocked', count: blockedCount }
+      }))
+    }
+  }
+
+  private optimizePreloads(doc: Document): void {
+    let optimizedCount = 0
+    
+    // Enhanced preload optimization
+    const preloads = doc.querySelectorAll('link[rel="preload"]')
+    preloads.forEach(link => {
+      const href = link.getAttribute('href')
+      const asAttr = link.getAttribute('as')
+      
+      if (href && (asAttr === 'video' || href.includes('.m3u8'))) {
+        link.setAttribute('rel', 'prefetch')
+        link.removeAttribute('as')
+        optimizedCount++
+      }
+    })
+
+    // Remove problematic video preloads
+    const problematicPreloads = doc.querySelectorAll(
+      'link[rel="preload"][href*=".ts"], ' +
+      'link[rel="preload"][href*="hls"]'
+    )
+    problematicPreloads.forEach(link => {
+      link.remove()
+      optimizedCount++
+    })
+
+    if (optimizedCount > 0) {
+      this.dispatchEvent(new CustomEvent('resource-optimized', {
+        detail: { type: 'preloadsOptimized', count: optimizedCount }
+      }))
+    }
+  }
+
+  private addResourceMonitoring(doc: Document): void {
+    // Add monitoring script for runtime cross-origin detection
+    const monitoringScript = doc.createElement('script')
+    monitoringScript.textContent = `
+      (function() {
+        const originalError = window.onerror;
+        window.onerror = function(msg, url, line, col, error) {
+          if (typeof msg === 'string' && 
+              (msg.includes('cross-origin') || 
+               msg.includes('CORS') || 
+               msg.includes('blocked'))) {
+            // Notify parent component of cross-origin issues
+            if (window.parent !== window) {
+              try {
+                window.parent.postMessage({
+                  type: 'cross-origin-error',
+                  message: msg,
+                  url: url
+                }, '*');
+              } catch (e) {
+                // Ignore postMessage errors
+              }
+            }
+          }
+          if (originalError) {
+            return originalError.apply(this, arguments);
+          }
+        };
+      })();
+    `
+    
+    const head = doc.querySelector('head')
+    if (head) {
+      head.appendChild(monitoringScript)
+    }
+  }
+  
+  private optimizeVideoPreloads(doc: Document): void {
+    // Convert video preloads to prefetch
+    const videoPreloads = doc.querySelectorAll('link[rel="preload"][as="video"]')
+    videoPreloads.forEach(link => {
+      link.setAttribute('rel', 'prefetch')
+      link.removeAttribute('as')
+    })
+    
+    // Remove HLS segment preloads
+    const hlsPreloads = doc.querySelectorAll('link[rel="preload"][href*=".m3u8"], link[rel="preload"][href*=".ts"]')
+    hlsPreloads.forEach(link => link.remove())
+    
+    // Optimize video elements
+    const videoElements = doc.querySelectorAll('video')
+    videoElements.forEach(video => {
+      const src = video.getAttribute('src')
+      if (src && (src.includes('.m3u8') || src.includes('hls'))) {
+        video.setAttribute('preload', 'metadata')
+        video.setAttribute('data-lazy-video', 'true')
+      }
+    })
+  }
+
+  private setupVideoLazyLoading(container: HTMLElement): void {
+    // Find all videos marked for lazy loading
+    const lazyVideos = container.querySelectorAll('video[data-lazy-video]')
+    
+    if ('IntersectionObserver' in window) {
+      const videoObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const video = entry.target as HTMLVideoElement
+            
+            // Add error handling for video loading
+            this.setupVideoErrorHandling(video)
+            
+            // Upgrade preload attribute when video is visible
+            if (video.getAttribute('preload') === 'metadata') {
+              video.setAttribute('preload', 'auto')
+            }
+            
+            // If video has a data-src attribute, move it to src
+            const dataSrc = video.getAttribute('data-src')
+            if (dataSrc) {
+              video.setAttribute('src', dataSrc)
+              video.removeAttribute('data-src')
+            }
+            
+            // Stop observing this video
+            videoObserver.unobserve(video)
+            
+            // Dispatch custom event for tracking
+            this.dispatchEvent(new CustomEvent('video-optimized', {
+              detail: { url: video.src || dataSrc },
+              bubbles: true
+            }))
+          }
+        })
+      }, {
+        rootMargin: '50px' // Start loading 50px before video enters viewport
+      })
+      
+      lazyVideos.forEach(video => videoObserver.observe(video))
+    } else {
+      // Fallback for browsers without IntersectionObserver
+      lazyVideos.forEach(video => {
+        this.setupVideoErrorHandling(video as HTMLVideoElement)
+        video.setAttribute('preload', 'auto')
+        const dataSrc = video.getAttribute('data-src')
+        if (dataSrc) {
+          video.setAttribute('src', dataSrc)
+          video.removeAttribute('data-src')
+        }
+      })
+    }
+  }
+
+  private setupVideoErrorHandling(video: HTMLVideoElement): void {
+    video.addEventListener('error', (event) => {
+      console.warn('Video loading error:', video.src)
+      
+      // Try to recover by removing problematic attributes
+      if (video.getAttribute('preload') === 'auto') {
+        video.setAttribute('preload', 'metadata')
+      }
+      
+      // Dispatch error event for tracking
+      this.dispatchEvent(new CustomEvent('video-error', {
+        detail: { 
+          url: video.src,
+          error: 'Failed to load video'
+        },
+        bubbles: true
+      }))
+      
+      // Add visual indicator
+      const errorOverlay = document.createElement('div')
+      errorOverlay.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0,0,0,0.8);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 4px;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+      `
+      errorOverlay.textContent = 'Video unavailable'
+      
+      if (video.parentElement) {
+        video.parentElement.style.position = 'relative'
+        video.parentElement.appendChild(errorOverlay)
+      }
+    })
+    
+    // Handle stalled video loading
+    video.addEventListener('stalled', () => {
+      console.warn('Video loading stalled:', video.src)
+      // Reduce preload level to prevent hanging
+      if (video.getAttribute('preload') === 'auto') {
+        video.setAttribute('preload', 'metadata')
+      }
+    })
   }
 }
 

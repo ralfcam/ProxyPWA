@@ -12,13 +12,222 @@ interface SSRProcessingOptions {
   inlineStyles?: boolean
 }
 
+// Enhanced function to sanitize and rewrite problematic cross-origin content
+function sanitizeCrossOriginContent(doc: Document, targetUrl: string): {
+  blockedScripts: number
+  blockedFrames: number
+  sanitizedInlineScripts: number
+} {
+  const targetOrigin = new URL(targetUrl).origin
+  const metrics = {
+    blockedScripts: 0,
+    blockedFrames: 0,
+    sanitizedInlineScripts: 0
+  }
+
+  // Enhanced script sanitization with whitelisting support
+  const scriptWhitelist = [
+    'https://cdn.jsdelivr.net',
+    'https://unpkg.com',
+    'https://cdnjs.cloudflare.com'
+  ]
+
+  // Remove or modify scripts that attempt cross-origin access
+  const crossOriginScripts = doc.querySelectorAll('script[src]')
+  crossOriginScripts.forEach((script: Element) => {
+    const src = script.getAttribute('src')
+    if (src) {
+      try {
+        const scriptUrl = new URL(src, targetUrl)
+        const isWhitelisted = scriptWhitelist.some(domain => scriptUrl.origin.includes(domain))
+        
+        if (scriptUrl.origin !== targetOrigin && !isWhitelisted) {
+          // Convert cross-origin scripts to safe placeholders
+          script.setAttribute('data-original-src', src)
+          script.setAttribute('data-blocked-origin', scriptUrl.origin)
+          script.removeAttribute('src')
+          
+          // Add a safe placeholder script
+          const safeScript = doc.createElement('script')
+          safeScript.textContent = `console.info('[Proxy] Cross-origin script blocked:', '${src}');`
+          script.parentNode?.replaceChild(safeScript, script)
+          
+          metrics.blockedScripts++
+        }
+      } catch (error) {
+        console.warn(`[Proxy] Failed to process script URL: ${src}`, error)
+        script.remove()
+        metrics.blockedScripts++
+      }
+    }
+  })
+
+  // Enhanced iframe handling with security attributes
+  const iframes = doc.querySelectorAll('iframe[src]')
+  iframes.forEach((iframe: Element) => {
+    const src = iframe.getAttribute('src')
+    if (src) {
+      try {
+        const iframeUrl = new URL(src, targetUrl)
+        if (iframeUrl.origin !== targetOrigin) {
+          // Apply strict sandboxing to cross-origin iframes
+          iframe.setAttribute('sandbox', 'allow-scripts allow-forms')
+          iframe.setAttribute('data-original-src', src)
+          iframe.setAttribute('data-cross-origin', 'true')
+          iframe.setAttribute('loading', 'lazy')
+          
+          // Add CSP for the iframe
+          iframe.setAttribute('csp', "default-src 'none'; script-src 'none';")
+          
+          metrics.blockedFrames++
+        }
+      } catch (error) {
+        console.warn(`[Proxy] Failed to process iframe URL: ${src}`, error)
+        iframe.remove()
+        metrics.blockedFrames++
+      }
+    }
+  })
+
+  // Remove postMessage and parent frame access attempts
+  const inlineMetrics = removeFrameAccessScripts(doc)
+  metrics.sanitizedInlineScripts = inlineMetrics.sanitizedCount
+
+  return metrics
+}
+
+function removeFrameAccessScripts(doc: Document): { sanitizedCount: number } {
+  const inlineScripts = doc.querySelectorAll('script:not([src])')
+  let sanitizedCount = 0
+  
+  inlineScripts.forEach((script: Element) => {
+    const content = script.textContent || ''
+    
+    // Enhanced patterns that commonly cause cross-origin violations
+    const problematicPatterns = [
+      { pattern: /window\.parent/gi, replacement: 'window.self' },
+      { pattern: /window\.top/gi, replacement: 'window.self' },
+      { pattern: /parent\.postMessage/gi, replacement: 'console.log' },
+      { pattern: /top\.postMessage/gi, replacement: 'console.log' },
+      { pattern: /document\.domain/gi, replacement: '""' },
+      { pattern: /window\.frames/gi, replacement: '[]' },
+      { pattern: /\.contentWindow/gi, replacement: '.contentDocument' },
+      { pattern: /window\.frameElement/gi, replacement: 'null' }
+    ]
+
+    let modifiedContent = content
+    let hasProblematicCode = false
+    
+    for (const { pattern, replacement } of problematicPatterns) {
+      if (pattern.test(modifiedContent)) {
+        hasProblematicCode = true
+        modifiedContent = modifiedContent.replace(pattern, replacement)
+      }
+    }
+
+    if (hasProblematicCode) {
+      script.setAttribute('data-original-content', content)
+      script.setAttribute('data-sanitized', 'true')
+      script.textContent = `// [Proxy] Script sanitized for cross-origin safety\ntry {\n${modifiedContent}\n} catch(e) { console.warn('[Proxy] Sanitized script error:', e); }`
+      sanitizedCount++
+    }
+  })
+  
+  return { sanitizedCount }
+}
+
+function addIntelligentResourceHints(doc: Document, targetUrl: string): number {
+  const head = doc.querySelector('head')
+  if (!head) return 0
+
+  const targetOrigin = new URL(targetUrl).origin
+  let hintsAdded = 0
+
+  // Add DNS prefetch for cross-origin resources
+  const crossOriginResources = new Set<string>()
+  
+  // Collect cross-origin resources
+  doc.querySelectorAll('[src], [href]').forEach((element: Element) => {
+    const url = element.getAttribute('src') || element.getAttribute('href')
+    if (url && !url.startsWith('#') && !url.startsWith('data:')) {
+      try {
+        const resourceUrl = new URL(url, targetUrl)
+        if (resourceUrl.origin !== targetOrigin && resourceUrl.protocol.startsWith('http')) {
+          crossOriginResources.add(resourceUrl.origin)
+        }
+      } catch (error) {
+        // Invalid URL, skip
+      }
+    }
+  })
+
+  // Add DNS prefetch hints
+  crossOriginResources.forEach(origin => {
+    const dnsPrefetch = doc.createElement('link')
+    dnsPrefetch.setAttribute('rel', 'dns-prefetch')
+    dnsPrefetch.setAttribute('href', origin)
+    dnsPrefetch.setAttribute('data-added-by', 'ssr-optimizer')
+    head.appendChild(dnsPrefetch)
+    hintsAdded++
+  })
+  
+  return hintsAdded
+}
+
+function addOptimizedCSPMeta(doc: Document): void {
+  const head = doc.querySelector('head')
+  if (!head) return
+
+  // Add a permissive but controlled CSP via meta tag
+  const cspMeta = doc.createElement('meta')
+  cspMeta.setAttribute('http-equiv', 'Content-Security-Policy')
+  cspMeta.setAttribute('content', 
+    "default-src * data: blob: 'unsafe-inline' 'unsafe-eval'; " +
+    "script-src * data: blob: 'unsafe-inline' 'unsafe-eval'; " +
+    "style-src * data: blob: 'unsafe-inline'; " +
+    "img-src * data: blob:; " +
+    "media-src * data: blob: https:; " +
+    "connect-src * data: blob:; " +
+    "frame-src * data: blob:; " +
+    "frame-ancestors *; " +
+    "base-uri *;"
+  )
+  head.appendChild(cspMeta)
+}
+
+// Enhanced logging with structured data
+function logSSROptimizations(
+  targetUrl: string, 
+  optimizations: string[],
+  metrics?: {
+    sanitization?: ReturnType<typeof sanitizeCrossOriginContent>
+    preloads?: ReturnType<typeof removeOrModifyVideoPreloads>
+  }
+): void {
+  const logData = {
+    url: targetUrl,
+    timestamp: new Date().toISOString(),
+    optimizations: optimizations.length,
+    details: optimizations,
+    metrics: {
+      totalBlockedScripts: metrics?.sanitization?.blockedScripts || 0,
+      totalBlockedFrames: metrics?.sanitization?.blockedFrames || 0,
+      totalSanitizedInline: metrics?.sanitization?.sanitizedInlineScripts || 0,
+      totalVideoOptimizations: metrics?.preloads?.videoPreloadsOptimized || 0,
+      totalHLSRemoved: metrics?.preloads?.hlsSegmentsRemoved || 0,
+      totalResourceHints: metrics?.preloads?.resourceHintsAdded || 0
+    }
+  }
+  
+  console.log('[SSR Proxy] Optimizations applied:', logData)
+}
+
 function processHtmlForSSR(
   html: string, 
   options: SSRProcessingOptions
 ): string {
   const { targetUrl, sessionId, proxyBaseUrl, removeScripts = true, inlineStyles = false } = options
   
-  // Parse HTML using deno-dom
   const doc = new DOMParser().parseFromString(html, 'text/html')
   if (!doc) {
     console.warn('Failed to parse HTML document')
@@ -27,31 +236,51 @@ function processHtmlForSSR(
 
   const targetUrlObj = new URL(targetUrl)
   const baseUrl = `${targetUrlObj.protocol}//${targetUrlObj.host}`
+  const optimizations: string[] = []
 
   // Remove problematic security headers from meta tags
   removeSecurityMetaTags(doc)
-  
+  optimizations.push('removed-security-meta-tags')
+
   // Inject base tag for proper resource resolution
   injectBaseTag(doc, baseUrl)
-  
+  optimizations.push('injected-base-tag')
+
+  // **NEW: Sanitize cross-origin content**
+  const sanitizationMetrics = sanitizeCrossOriginContent(doc, targetUrl)
+  optimizations.push(`sanitized-cross-origin-content: ${sanitizationMetrics.blockedScripts} scripts, ${sanitizationMetrics.blockedFrames} frames, ${sanitizationMetrics.sanitizedInlineScripts} inline`)
+
   // Transform URLs to absolute paths
   transformUrls(doc, targetUrl)
-  
+  optimizations.push('transformed-urls')
+
   // Remove or modify problematic scripts
   if (removeScripts) {
     removeProblematicScripts(doc)
+    optimizations.push('removed-problematic-scripts')
   }
-  
-  // Handle stylesheets
-  if (inlineStyles) {
-    // Note: Async operations would need to be handled separately
-    transformStylesheetUrls(doc, targetUrl)
-  } else {
-    transformStylesheetUrls(doc, targetUrl)
-  }
-  
+
+  // **ENHANCED: Better preload resource management**
+  const preloadMetrics = removeOrModifyVideoPreloads(doc, targetUrl)
+  optimizations.push(`optimized-preloads: ${preloadMetrics.videoPreloadsOptimized} videos, ${preloadMetrics.hlsSegmentsRemoved} HLS, ${preloadMetrics.crossOriginPreloadsFixed} cross-origin, ${preloadMetrics.resourceHintsAdded} hints`)
+
+  // Optimize video elements for lazy loading
+  optimizeVideoPreloads(doc)
+  optimizations.push('optimized-video-elements')
+
+  // **NEW: Add Content Security Policy meta tag**
+  addOptimizedCSPMeta(doc)
+  optimizations.push('added-optimized-csp')
+
   // Add SSR metadata
   addSSRMetadata(doc, sessionId)
+  optimizations.push('added-ssr-metadata')
+
+  // Use enhanced logging with metrics
+  logSSROptimizations(targetUrl, optimizations, {
+    sanitization: sanitizationMetrics,
+    preloads: preloadMetrics
+  })
   
   return doc.documentElement?.outerHTML || html
 }
@@ -158,6 +387,359 @@ function addSSRMetadata(doc: Document, sessionId?: string): void {
   }
 }
 
+function removeOrModifyVideoPreloads(doc: Document, targetUrl: string): {
+  videoPreloadsOptimized: number
+  hlsSegmentsRemoved: number
+  crossOriginPreloadsFixed: number
+  resourceHintsAdded: number
+} {
+  const metrics = {
+    videoPreloadsOptimized: 0,
+    hlsSegmentsRemoved: 0,
+    crossOriginPreloadsFixed: 0,
+    resourceHintsAdded: 0
+  }
+  
+  // Enhanced preload management for various resource types
+  const preloadLinks = doc.querySelectorAll('link[rel="preload"]')
+  
+  preloadLinks.forEach((link: Element) => {
+    const href = link.getAttribute('href')
+    const asAttribute = link.getAttribute('as')
+    
+    if (!href) return
+
+    try {
+      const resourceUrl = new URL(href, targetUrl)
+      
+      // Handle different resource types
+      if (asAttribute === 'video' || href.includes('.m3u8') || href.includes('.mp4')) {
+        // Convert video preloads to prefetch
+        link.setAttribute('rel', 'prefetch')
+        link.removeAttribute('as')
+        link.setAttribute('data-converted', 'video-preload-to-prefetch')
+        metrics.videoPreloadsOptimized++
+      } else if (href.includes('.ts') || href.includes('hls')) {
+        // Remove HLS segment preloads entirely
+        link.remove()
+        metrics.hlsSegmentsRemoved++
+      } else if (asAttribute === 'script' && resourceUrl.origin !== new URL(targetUrl).origin) {
+        // Handle cross-origin script preloads
+        link.setAttribute('rel', 'prefetch')
+        link.setAttribute('crossorigin', 'anonymous')
+        link.setAttribute('data-converted', 'cross-origin-script')
+        metrics.crossOriginPreloadsFixed++
+      } else if (asAttribute === 'style' && resourceUrl.origin !== new URL(targetUrl).origin) {
+        // Handle cross-origin style preloads
+        link.setAttribute('rel', 'prefetch')
+        link.setAttribute('crossorigin', 'anonymous')
+        link.setAttribute('data-converted', 'cross-origin-style')
+        metrics.crossOriginPreloadsFixed++
+      }
+    } catch (error) {
+      console.warn(`[Proxy] Failed to process preload URL: ${href}`, error)
+      link.remove()
+    }
+  })
+
+  // Add intelligent resource hints for better performance
+  const hintsAdded = addIntelligentResourceHints(doc, targetUrl)
+  metrics.resourceHintsAdded = hintsAdded
+  
+  return metrics
+}
+
+function optimizeVideoPreloads(doc: Document): void {
+  const videoElements = doc.querySelectorAll('video')
+  
+  videoElements.forEach((video: Element) => {
+    // Set preload to metadata for HLS videos to reduce bandwidth
+    const src = video.getAttribute('src')
+    if (src && (src.includes('.m3u8') || src.includes('hls'))) {
+      video.setAttribute('preload', 'metadata')
+    }
+    
+    // Add data attribute for lazy loading detection
+    video.setAttribute('data-lazy-video', 'true')
+  })
+}
+
+// BrowserQL Integration - Enhanced SSR Proxy with Bot Detection Bypass
+// Updated BrowserQL configuration for Amsterdam endpoint
+const BROWSERQL_ENDPOINT = 'https://production-ams.browserless.io/chromium/bql'
+const BROWSERQL_TOKEN = Deno.env.get('BROWSERQL_TOKEN') || '2SWMmTcJ5Xy9YFNd1c30ebed5875c88c3a2b2505ba65ccedb'
+
+interface BrowserQLRenderOptions {
+  targetUrl: string
+  sessionId?: string
+  waitUntil?: 'load' | 'domcontentloaded' | 'networkIdle' | 'firstMeaningfulPaint' | 'firstContentfulPaint'
+  timeout?: number
+  viewport?: { width: number; height: number }
+  userAgent?: string
+  useProxy?: boolean
+  proxyCountry?: string
+  bypassBot?: boolean
+  solveCaptcha?: boolean
+}
+
+interface BrowserQLResponse {
+  data?: {
+    goto?: { status: number }
+    html?: { html: string }
+    screenshot?: { base64: string }
+    verify?: { found: boolean; solved: boolean; time: number }
+    captcha?: { found: boolean; solved: boolean; time: number }
+  }
+  errors?: Array<{ message: string }>
+}
+
+async function renderWithBrowserQL(
+  options: BrowserQLRenderOptions
+): Promise<{ html: string; screenshot?: string; error?: string; metadata?: any }> {
+  
+  const {
+    targetUrl,
+    sessionId,
+    waitUntil = 'networkIdle',
+    timeout = 30000,
+    viewport = { width: 1920, height: 1080 },
+    userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    useProxy = true,
+    proxyCountry = 'nl', // Netherlands for Amsterdam region
+    bypassBot = true,
+    solveCaptcha = true
+  } = options
+
+  if (!BROWSERQL_TOKEN) {
+    console.error('BROWSERQL_TOKEN environment variable is not set')
+    throw new Error('BrowserQL configuration error')
+  }
+
+  try {
+    console.log(`Rendering ${targetUrl} with BrowserQL (Amsterdam region)`)
+    
+    // Build the GraphQL query with conditional bot detection bypass
+    const query = `
+      mutation RenderPage($url: String!) {
+        goto(url: $url, waitUntil: ${waitUntil}) {
+          status
+        }
+        
+        ${bypassBot ? `
+        # Bypass Cloudflare and other bot detection
+        verify(type: cloudflare) {
+          found
+          solved
+          time
+        }
+        ` : ''}
+        
+        ${solveCaptcha ? `
+        # Solve CAPTCHAs if present
+        verify(type: hcaptcha) {
+          found
+          solved
+          time
+        }
+        ` : ''}
+        
+        # Get the page HTML
+        html {
+          html
+        }
+        
+        # Optional: Get screenshot for debugging
+        screenshot(type: jpeg, quality: 80) {
+          base64
+        }
+      }
+    `
+
+    // Build query parameters for enhanced bot detection bypass
+    const queryParams = new URLSearchParams({
+      token: BROWSERQL_TOKEN,
+      timeout: timeout.toString(),
+      ...(useProxy && {
+        proxy: 'residential',
+        proxyCountry,
+        proxySticky: 'true' // Maintain same IP for entire session
+      })
+    })
+    
+    const requestBody = {
+      query,
+      variables: { url: targetUrl }
+    }
+
+    console.log('BrowserQL request:', { targetUrl, useProxy, proxyCountry, bypassBot })
+    
+    const response = await fetch(`${BROWSERQL_ENDPOINT}?${queryParams.toString()}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': userAgent
+      },
+      body: JSON.stringify(requestBody)
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`BrowserQL API error (${response.status}): ${errorText}`)
+    }
+
+    const result: BrowserQLResponse = await response.json()
+    
+    if (result.errors && result.errors.length > 0) {
+      throw new Error(`BrowserQL GraphQL errors: ${result.errors.map(e => e.message).join(', ')}`)
+    }
+
+    if (!result.data?.html?.html) {
+      throw new Error('No HTML content received from BrowserQL')
+    }
+
+    // Extract metadata about bot detection bypass
+    const metadata = {
+      status: result.data.goto?.status || 200,
+      botDetectionBypassed: !!result.data.verify?.solved,
+      captchaSolved: !!result.data.captcha?.solved,
+      cloudflareFound: !!result.data.verify?.found,
+      captchaFound: !!result.data.captcha?.found,
+      verificationTime: result.data.verify?.time || 0,
+      captchaTime: result.data.captcha?.time || 0
+    }
+
+    // Post-process the rendered HTML
+    const processedHtml = postProcessBrowserQLHTML(result.data.html.html, targetUrl, sessionId, metadata)
+    
+    console.log('BrowserQL rendering successful:', {
+      url: targetUrl,
+      status: metadata.status,
+      botDetectionBypassed: metadata.botDetectionBypassed,
+      captchaSolved: metadata.captchaSolved
+    })
+    
+    return { 
+      html: processedHtml,
+      screenshot: result.data.screenshot?.base64,
+      metadata
+    }
+    
+  } catch (error) {
+    console.error('BrowserQL rendering failed:', error)
+    return { 
+      html: '', 
+      error: `BrowserQL rendering failed: ${error.message}` 
+    }
+  }
+}
+
+// Enhanced post-processing for BrowserQL rendered content
+function postProcessBrowserQLHTML(
+  html: string, 
+  targetUrl: string, 
+  sessionId?: string,
+  metadata?: any
+): string {
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    if (!doc) return html
+
+    const head = doc.querySelector('head')
+    if (!head) return html
+
+    // Remove existing base tags
+    const existingBase = head.querySelector('base')
+    if (existingBase) existingBase.remove()
+    
+    // Inject base tag for proper resource resolution
+    const baseTag = doc.createElement('base')
+    baseTag.setAttribute('href', new URL(targetUrl).origin + '/')
+    head.insertBefore(baseTag, head.firstChild)
+
+    // Add BrowserQL metadata
+    const browserqlMeta = doc.createElement('meta')
+    browserqlMeta.setAttribute('name', 'browserql-rendered')
+    browserqlMeta.setAttribute('content', 'true')
+    head.appendChild(browserqlMeta)
+
+    if (sessionId) {
+      const sessionMeta = doc.createElement('meta')
+      sessionMeta.setAttribute('name', 'proxy-session-id')
+      sessionMeta.setAttribute('content', sessionId)
+      head.appendChild(sessionMeta)
+    }
+
+    // Add metadata about bot detection bypass
+    if (metadata) {
+      const metadataMeta = doc.createElement('meta')
+      metadataMeta.setAttribute('name', 'browserql-metadata')
+      metadataMeta.setAttribute('content', JSON.stringify(metadata))
+      head.appendChild(metadataMeta)
+    }
+
+    // Remove any remaining frame-busting scripts
+    const scripts = doc.querySelectorAll('script')
+    scripts.forEach(script => {
+      const content = script.textContent || ''
+      if (content.includes('top.location') || 
+          content.includes('parent.location') ||
+          content.includes('window.top') ||
+          content.includes('frameElement')) {
+        script.remove()
+      }
+    })
+
+    return doc.documentElement?.outerHTML || html
+  } catch (error) {
+    console.warn('BrowserQL post-processing failed, returning original HTML:', error)
+    return html
+  }
+}
+
+// Fallback handler for when BrowserQL fails
+async function handleFallbackProxy(
+  req: Request, 
+  validatedUrl: string, 
+  responseTime: number
+): Promise<Response> {
+  try {
+    // Use the existing proxy logic as fallback
+    const proxyHeaders = createProxyHeaders(req)
+    const proxyResponse = await fetch(validatedUrl, {
+      method: req.method,
+      headers: proxyHeaders,
+      body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : undefined,
+      redirect: 'follow',
+    })
+    
+    const contentType = proxyResponse.headers.get('content-type') || ''
+    let responseBody: ArrayBuffer | string
+    
+    if (contentType.includes('text/html')) {
+      const htmlText = await proxyResponse.text()
+      responseBody = modifyHtmlForProxy(
+        htmlText, 
+        validatedUrl, 
+        undefined, 
+        new URL(req.url).origin + '/proxy-service'
+      )
+    } else {
+      responseBody = await proxyResponse.arrayBuffer()
+    }
+    
+    const responseHeaders = createResponseHeaders(proxyResponse, responseTime)
+    responseHeaders.set('X-Fallback-Mode', 'traditional-proxy')
+    
+    return new Response(responseBody, {
+      status: proxyResponse.status,
+      statusText: proxyResponse.statusText,
+      headers: responseHeaders,
+    })
+  } catch (error) {
+    throw new Error(`Fallback proxy also failed: ${error.message}`)
+  }
+}
+
 function createSSRResponseHeaders(
   proxyResponse: Response, 
   responseTime: number,
@@ -167,7 +749,8 @@ function createSSRResponseHeaders(
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Credentials': 'true',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, Range',
+    'Accept-Ranges': 'bytes'
   })
 
   // Copy safe response headers
@@ -198,26 +781,31 @@ function createSSRResponseHeaders(
     }
   }
 
-  // Set CSP based on mode
+  // Set CSP based on mode with enhanced media policies
   const cspPolicies = {
     permissive: "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; " +
                 "script-src * 'unsafe-inline' 'unsafe-eval' data: blob:; " +
                 "style-src * 'unsafe-inline' data: blob:; " +
                 "img-src * data: blob:; " +
+                "media-src * data: blob: https:; " +
+                "connect-src * data: blob: wss: ws:; " +
                 "font-src * data: blob:; " +
-                "connect-src * data: blob:; " +
                 "frame-ancestors *;",
     
     balanced: "default-src 'self' * data: blob: 'unsafe-inline'; " +
               "script-src 'self' * 'unsafe-inline' 'unsafe-eval'; " +
               "style-src 'self' * 'unsafe-inline'; " +
               "img-src * data: blob:; " +
+              "media-src * data: blob: https:; " +
+              "connect-src * data: blob: wss: ws:; " +
               "frame-ancestors *;",
     
     strict: "default-src 'self'; " +
             "script-src 'self' 'unsafe-inline'; " +
             "style-src 'self' 'unsafe-inline'; " +
             "img-src 'self' data:; " +
+            "media-src 'self' https:; " +
+            "connect-src 'self' wss: ws:; " +
             "frame-ancestors 'self';"
   }
 
@@ -230,7 +818,6 @@ function createSSRResponseHeaders(
 }
 
 serve(async (req) => {
-  // Handle CORS preflight requests
   const corsResponse = handleCors(req)
   if (corsResponse) return corsResponse
 
@@ -242,9 +829,14 @@ serve(async (req) => {
     // Parse the request to determine proxy mode and extract parameters
     const { mode, sessionId, targetUrl } = parseProxyRequest(url)
     
-    // Check for SSR mode parameter
+    // Enhanced SSR mode detection with BrowserQL parameters
     const ssrMode = url.searchParams.get('ssr') === 'true'
-    const cspMode = url.searchParams.get('csp') as 'permissive' | 'balanced' | 'strict' || 'balanced'
+    const cspMode = url.searchParams.get('csp') as 'permissive' | 'balanced' | 'strict' || 'permissive'
+    const renderQuality = url.searchParams.get('quality') as 'fast' | 'balanced' | 'complete' || 'balanced'
+    const bypassBot = url.searchParams.get('bypass') !== 'false' // Default to true
+    const useProxy = url.searchParams.get('proxy') !== 'false' // Default to true
+    const proxyCountry = url.searchParams.get('country') || 'nl' // Default to Netherlands
+    const customWait = url.searchParams.get('wait') as 'load' | 'domcontentloaded' | 'networkIdle' | 'firstMeaningfulPaint' | 'firstContentfulPaint' | null
     
     // If no target URL is provided, return a helpful message instead of error
     if (!targetUrl) {
@@ -252,21 +844,41 @@ serve(async (req) => {
       if (!sessionId) {
         return new Response(
           JSON.stringify({ 
-            message: 'Enhanced Proxy Service v2.0 - SSR Enabled',
+            message: 'Enhanced Proxy Service v3.0 - BrowserQL Enabled',
             status: 'operational',
             features: {
-              ssr: 'Server-side rendering for CSP bypass',
-              modes: ['iframe', 'ssr', 'auto'],
-              cspLevels: ['permissive', 'balanced', 'strict'],
+              renderer: 'browserql-graphql',
+              region: 'amsterdam-europe',
+              capabilities: [
+                'bot-detection-bypass',
+                'captcha-solving',
+                'residential-proxies',
+                'javascript-execution',
+                'screenshot-capture'
+              ],
+              modes: ['iframe', 'ssr'],
+              qualities: ['fast', 'balanced', 'complete'],
+              waitStrategies: ['load', 'domcontentloaded', 'networkIdle', 'firstMeaningfulPaint', 'firstContentfulPaint'],
               defaultMode: 'ssr',
-              defaultCsp: 'permissive'
+              defaultQuality: 'balanced'
             },
             usage: {
-              basic: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}',
-              withSSR: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&csp=permissive',
-              example: 'GET /proxy-service/abc123/https%3A%2F%2Fexample.com?ssr=true&csp=permissive'
+              basic: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true',
+              withBotBypass: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&bypass=true&proxy=true',
+              withCountry: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&country=us&quality=complete',
+              withCustomWait: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&wait=load',
+              fastMode: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&quality=fast&wait=load'
             },
-            version: '2.0.0'
+            parameters: {
+              ssr: 'Enable server-side rendering (true/false)',
+              quality: 'Render quality: fast, balanced, complete',
+              wait: 'Wait strategy: load, domcontentloaded, networkIdle, firstMeaningfulPaint, firstContentfulPaint',
+              bypass: 'Enable bot detection bypass (true/false)',
+              proxy: 'Use residential proxy (true/false)',
+              country: 'Proxy country code (nl, us, gb, de, fr, ca)',
+              csp: 'Content Security Policy level (permissive, balanced, strict)'
+            },
+            version: '3.0.0'
           }), 
           { 
             status: 200,
@@ -280,7 +892,7 @@ serve(async (req) => {
       throw new Error('Missing target URL')
     }
 
-    console.log('Proxy request:', { mode, sessionId, targetUrl })
+    console.log('Proxy request:', { mode, sessionId, targetUrl, ssrMode, bypassBot, useProxy, proxyCountry })
 
     // Validate target URL
     const validatedUrl = validateAndNormalizeUrl(targetUrl)
@@ -291,12 +903,129 @@ serve(async (req) => {
       userId = await validateSessionAndUser(supabase, sessionId)
     }
 
+    const startTime = Date.now()
+
+    // Handle SSR mode with BrowserQL
+    if (ssrMode) {
+      console.log(`Using BrowserQL for enhanced SSR rendering: ${validatedUrl}`)
+      
+      // Configure BrowserQL options based on quality setting
+      const browserqlOptions: BrowserQLRenderOptions = {
+        targetUrl: validatedUrl,
+        sessionId,
+        waitUntil: customWait || (renderQuality === 'fast' ? 'load' : 
+                  renderQuality === 'complete' ? 'networkIdle' : 'firstContentfulPaint'),
+        timeout: renderQuality === 'fast' ? 20000 : 
+                renderQuality === 'complete' ? 90000 : 45000,
+        userAgent: req.headers.get('user-agent') || undefined,
+        useProxy,
+        proxyCountry,
+        bypassBot,
+        solveCaptcha: renderQuality === 'complete' // Only solve CAPTCHAs on complete quality
+      }
+
+      console.log(`BrowserQL settings: quality=${renderQuality}, waitUntil=${browserqlOptions.waitUntil}, timeout=${browserqlOptions.timeout}ms`)
+
+      const renderResult = await renderWithBrowserQL(browserqlOptions)
+      const endTime = Date.now()
+      const responseTime = endTime - startTime
+
+      if (renderResult.error) {
+        console.error('BrowserQL rendering failed:', renderResult.error)
+        
+        // For timeout errors, try again with faster settings
+        if (renderResult.error.includes('timeout') && renderQuality !== 'fast') {
+          console.log('Retrying with faster settings due to timeout...')
+          const fastOptions = {
+            ...browserqlOptions,
+            waitUntil: 'load' as const,
+            timeout: 20000,
+            bypassBot: false,
+            useProxy: false
+          }
+          const retryResult = await renderWithBrowserQL(fastOptions)
+          if (!retryResult.error) {
+            console.log('Retry successful with faster settings')
+            return new Response(retryResult.html, {
+              status: 200,
+              headers: createSSRResponseHeaders(new Response(retryResult.html), responseTime, cspMode)
+            })
+          }
+        }
+        
+        // Fallback to traditional proxy mode
+        console.log('Falling back to traditional proxy mode')
+        return await handleFallbackProxy(req, validatedUrl, responseTime)
+      }
+
+      const responseHeaders = createSSRResponseHeaders(
+        new Response(renderResult.html), 
+        responseTime, 
+        cspMode
+      )
+
+      // Enhanced headers for BrowserQL rendered content
+      responseHeaders.set('X-Renderer', 'browserql-graphql')
+      responseHeaders.set('X-Render-Quality', renderQuality)
+      responseHeaders.set('X-Render-Time', responseTime.toString())
+      responseHeaders.set('X-Region', 'amsterdam-europe')
+      responseHeaders.set('X-Bot-Bypass', bypassBot.toString())
+      responseHeaders.set('X-Proxy-Used', useProxy.toString())
+      responseHeaders.set('X-Proxy-Country', proxyCountry)
+
+      // Add metadata headers if available
+      if (renderResult.metadata) {
+        responseHeaders.set('X-Bot-Detection-Bypassed', renderResult.metadata.botDetectionBypassed.toString())
+        responseHeaders.set('X-Captcha-Solved', renderResult.metadata.captchaSolved.toString())
+        responseHeaders.set('X-Cloudflare-Found', renderResult.metadata.cloudflareFound.toString())
+      }
+
+      // Update metrics for authenticated requests
+      if (mode === 'authenticated' && sessionId && userId) {
+        await updateMetricsAndLogs(supabase, {
+          sessionId,
+          userId,
+          targetUrl: validatedUrl,
+          responseSize: new TextEncoder().encode(renderResult.html).length,
+          responseTime,
+          statusCode: 200,
+          method: req.method,
+          userAgent: req.headers.get('user-agent'),
+          contentType: 'text/html',
+        })
+
+        // Enhanced logging for BrowserQL usage
+        await supabase.from('usage_logs').insert({
+          user_id: userId,
+          session_id: sessionId,
+          event_type: 'browserql_render',
+          metadata: {
+            renderer: 'browserql-graphql',
+            quality: renderQuality,
+            url: validatedUrl,
+            response_time_ms: responseTime,
+            html_size_bytes: new TextEncoder().encode(renderResult.html).length,
+            bot_bypass_enabled: bypassBot,
+            proxy_enabled: useProxy,
+            proxy_country: proxyCountry,
+            bot_detection_bypassed: renderResult.metadata?.botDetectionBypassed || false,
+            captcha_solved: renderResult.metadata?.captchaSolved || false,
+            cloudflare_found: renderResult.metadata?.cloudflareFound || false
+          }
+        })
+      }
+
+      return new Response(renderResult.html, {
+        status: 200,
+        headers: responseHeaders
+      })
+    }
+
+    // Handle traditional proxy mode (non-SSR)
     // Create headers for the proxy request
     const proxyHeaders = createProxyHeaders(req)
 
     // Make the proxy request
-    const startTime = Date.now()
-    
     const proxyResponse = await fetch(validatedUrl, {
       method: req.method,
       headers: proxyHeaders,

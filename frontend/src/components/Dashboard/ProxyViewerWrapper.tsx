@@ -10,9 +10,9 @@ interface ProxyViewerWrapperProps {
   cspLevel?: 'permissive' | 'balanced' | 'strict'
   fallbackEnabled?: boolean
   renderQuality?: 'fast' | 'balanced' | 'complete'
-  bypassBot?: boolean
-  useProxy?: boolean
-  proxyCountry?: string
+  stealth?: boolean
+  blockAds?: boolean
+  blockResources?: boolean
   onNavigate?: (url: string) => void
   onLoad?: (event: { mode: string; url: string }) => void
   onError?: (error: Error) => void
@@ -27,9 +27,9 @@ const ProxyViewerWrapper = React.forwardRef<HTMLElement, ProxyViewerWrapperProps
   cspLevel = 'balanced',
   fallbackEnabled = true,
   renderQuality,
-  bypassBot,
-  useProxy,
-  proxyCountry,
+  stealth,
+  blockAds,
+  blockResources,
   onNavigate,
   onLoad,
   onError,
@@ -119,16 +119,16 @@ const ProxyViewerWrapper = React.forwardRef<HTMLElement, ProxyViewerWrapperProps
     if (renderQuality) {
       element.setAttribute('render-quality', renderQuality)
     }
-    if (bypassBot !== undefined) {
-      element.setAttribute('bypass-bot', bypassBot.toString())
+    if (stealth !== undefined) {
+      element.setAttribute('stealth', stealth.toString())
     }
-    if (useProxy !== undefined) {
-      element.setAttribute('use-proxy', useProxy.toString())
+    if (blockAds !== undefined) {
+      element.setAttribute('block-ads', blockAds.toString())
     }
-    if (proxyCountry) {
-      element.setAttribute('proxy-country', proxyCountry)
+    if (blockResources !== undefined) {
+      element.setAttribute('block-resources', blockResources.toString())
     }
-  }, [targetUrl, sessionId, currentMode, cspLevel, fallbackEnabled, proxyBaseUrl, renderQuality, bypassBot, useProxy, proxyCountry])
+  }, [targetUrl, sessionId, currentMode, cspLevel, fallbackEnabled, proxyBaseUrl, renderQuality, stealth, blockAds, blockResources])
 
   // Fallback iframe implementation for unsupported browsers
   if (!isWebComponentSupported && currentMode === 'iframe') {
@@ -163,9 +163,9 @@ const ProxyViewerWrapper = React.forwardRef<HTMLElement, ProxyViewerWrapperProps
       fallback-enabled={fallbackEnabled.toString()}
       proxy-base-url={proxyBaseUrl}
       render-quality={renderQuality}
-      bypass-bot={bypassBot?.toString()}
-      use-proxy={useProxy?.toString()}
-      proxy-country={proxyCountry}
+      stealth={stealth?.toString()}
+      block-ads={blockAds?.toString()}
+      block-resources={blockResources?.toString()}
       className={className}
       style={style}
     />

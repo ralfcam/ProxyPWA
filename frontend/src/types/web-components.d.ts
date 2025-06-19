@@ -7,6 +7,10 @@ declare namespace JSX {
       'csp-level'?: string
       'fallback-enabled'?: string
       'proxy-base-url'?: string
+      'render-quality'?: string
+      'stealth'?: string
+      'block-ads'?: string
+      'block-resources'?: string
     }, HTMLElement>
   }
 }

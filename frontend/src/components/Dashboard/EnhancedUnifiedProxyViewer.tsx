@@ -21,22 +21,19 @@ const EnhancedUnifiedProxyViewer = ({
   const [cspLevel, setCspLevel] = useState<SecurityLevel>('permissive')  // Default to permissive for better compatibility
   const [streamingOptimization, setStreamingOptimization] = useState(true)
   
-  // BrowserQL-specific state variables
+  // BaaS-specific state variables (replacing BrowserQL)
   const [renderQuality, setRenderQuality] = useState<'fast' | 'balanced' | 'complete'>('balanced')
-  const [browserqlOptions, setBrowserqlOptions] = useState({
-    bypassBot: true,
-    useProxy: true,
-    proxyCountry: 'nl',
-    solveCaptcha: false
+  const [baasOptions, setBaasOptions] = useState({
+    stealth: true,
+    blockAds: true,
+    blockResources: false
   })
 
-  const [browserqlMetrics, setBrowserqlMetrics] = useState({
+  const [baasMetrics, setBaasMetrics] = useState({
     renderTime: 0,
-    renderer: 'unknown',
-    botDetectionBypassed: false,
-    captchaSolved: false,
-    cloudflareFound: false,
-    region: 'amsterdam-europe'
+    loadTime: 0,
+    networkRequests: 0,
+    renderer: 'browserless-baas'
   })
   
   const {
@@ -84,10 +81,10 @@ const EnhancedUnifiedProxyViewer = ({
         }))
       }
 
-      const handleBrowserQLMetadata = (event: CustomEvent) => {
+      const handleBaasMetadata = (event: CustomEvent) => {
         const metadata = event.detail
         if (metadata) {
-          setBrowserqlMetrics(prev => ({
+          setBaasMetrics(prev => ({
             ...prev,
             ...metadata
           }))
@@ -96,13 +93,13 @@ const EnhancedUnifiedProxyViewer = ({
 
       viewerRef.current.addEventListener('video-optimized', handleVideoOptimized)
       viewerRef.current.addEventListener('resource-optimized', handleResourceOptimized)
-      viewerRef.current.addEventListener('browserql-metadata', handleBrowserQLMetadata)
+      viewerRef.current.addEventListener('baas-metadata', handleBaasMetadata)
       
       return () => {
         if (viewerRef.current) {
           viewerRef.current.removeEventListener('video-optimized', handleVideoOptimized)
           viewerRef.current.removeEventListener('resource-optimized', handleResourceOptimized)
-          viewerRef.current.removeEventListener('browserql-metadata', handleBrowserQLMetadata)
+          viewerRef.current.removeEventListener('baas-metadata', handleBaasMetadata)
         }
       }
     }
@@ -408,9 +405,9 @@ const EnhancedUnifiedProxyViewer = ({
                         onChange={(e) => setRenderQuality(e.target.value as any)}
                         className="text-xs border rounded px-2 py-1 bg-background ml-2"
                       >
-                        <option value="fast">Fast (15s, basic bypass)</option>
-                        <option value="balanced">Balanced (30s, bot bypass)</option>
-                        <option value="complete">Complete (60s, bot + CAPTCHA)</option>
+                        <option value="fast">Fast (15s timeout)</option>
+                        <option value="balanced">Balanced (30s timeout)</option>
+                        <option value="complete">Complete (45s timeout)</option>
                       </select>
                     </div>
                     
@@ -418,56 +415,47 @@ const EnhancedUnifiedProxyViewer = ({
                       <label className="flex items-center gap-2 text-sm font-medium">
                         <input
                           type="checkbox"
-                          checked={browserqlOptions.bypassBot}
-                          onChange={(e) => setBrowserqlOptions(prev => ({ ...prev, bypassBot: e.target.checked }))}
+                          checked={baasOptions.stealth}
+                          onChange={(e) => setBaasOptions(prev => ({ ...prev, stealth: e.target.checked }))}
                           className="rounded"
                         />
-                        <span>Bypass Bot Detection</span>
+                        <span>Stealth Browsing</span>
                       </label>
                       
                       <label className="flex items-center gap-2 text-sm font-medium">
                         <input
                           type="checkbox"
-                          checked={browserqlOptions.useProxy}
-                          onChange={(e) => setBrowserqlOptions(prev => ({ ...prev, useProxy: e.target.checked }))}
+                          checked={baasOptions.blockAds}
+                          onChange={(e) => setBaasOptions(prev => ({ ...prev, blockAds: e.target.checked }))}
                           className="rounded"
                         />
-                        <span>Use Residential Proxy</span>
+                        <span>Block Ads & Trackers</span>
                       </label>
                       
-                      {browserqlOptions.useProxy && (
-                        <div className="flex items-center gap-2 text-sm">
-                          <span className="text-muted-foreground">Proxy Country:</span>
-                          <select 
-                            value={browserqlOptions.proxyCountry} 
-                            onChange={(e) => setBrowserqlOptions(prev => ({ ...prev, proxyCountry: e.target.value }))}
-                            className="text-xs border rounded px-2 py-1 bg-background ml-2"
-                          >
-                            <option value="nl">Netherlands</option>
-                            <option value="us">United States</option>
-                            <option value="gb">United Kingdom</option>
-                            <option value="de">Germany</option>
-                            <option value="fr">France</option>
-                            <option value="ca">Canada</option>
-                          </select>
-                        </div>
-                      )}
+                      <label className="flex items-center gap-2 text-sm font-medium">
+                        <input
+                          type="checkbox"
+                          checked={baasOptions.blockResources}
+                          onChange={(e) => setBaasOptions(prev => ({ ...prev, blockResources: e.target.checked }))}
+                          className="rounded"
+                        />
+                        <span>Block Heavy Resources (Fast Mode)</span>
+                      </label>
                     </div>
                     
                     <div className="text-xs text-muted-foreground mt-2">
-                      BrowserQL provides advanced bot detection bypass using GraphQL-based browser automation.
-                      {renderQuality === 'complete' && ' Complete mode includes CAPTCHA solving capabilities.'}
+                      BaaS provides simplified browser automation through REST API.
+                      Stealth mode bypasses most bot detection systems.
                     </div>
                     
-                    {browserqlMetrics.renderTime > 0 && (
+                    {baasMetrics.renderTime > 0 && (
                       <div className="mt-3 p-2 bg-green-100 dark:bg-green-900/30 rounded text-xs">
-                        ✓ BrowserQL Rendering Complete
+                        ✓ BaaS Rendering Complete
                         <div className="flex flex-wrap gap-2 mt-1 text-xs">
-                          <span>Region: {browserqlMetrics.region}</span>
-                          <span>Render Time: {browserqlMetrics.renderTime}ms</span>
-                          {browserqlMetrics.botDetectionBypassed && <span>🛡️ Bot Detection Bypassed</span>}
-                          {browserqlMetrics.captchaSolved && <span>🔐 CAPTCHA Solved</span>}
-                          {browserqlMetrics.cloudflareFound && <span>☁️ Cloudflare Detected & Handled</span>}
+                          <span>Render Time: {baasMetrics.renderTime}ms</span>
+                          <span>Load Time: {baasMetrics.loadTime}ms</span>
+                          <span>Network Requests: {baasMetrics.networkRequests}</span>
+                          <span>Region: Amsterdam</span>
                         </div>
                       </div>
                     )}
@@ -574,9 +562,9 @@ const EnhancedUnifiedProxyViewer = ({
               cspLevel={cspLevel}
               fallbackEnabled={true}
               renderQuality={renderQuality}
-              bypassBot={browserqlOptions.bypassBot}
-              useProxy={browserqlOptions.useProxy}
-              proxyCountry={browserqlOptions.proxyCountry}
+              stealth={baasOptions.stealth}
+              blockAds={baasOptions.blockAds}
+              blockResources={baasOptions.blockResources}
               onNavigate={handleProxyNavigate}
               onLoad={handleProxyLoad}
               onError={handleProxyError}

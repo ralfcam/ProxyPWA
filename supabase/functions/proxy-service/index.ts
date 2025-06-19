@@ -464,182 +464,124 @@ function optimizeVideoPreloads(doc: Document): void {
   })
 }
 
-// BrowserQL Integration - Enhanced SSR Proxy with Bot Detection Bypass
-// Updated BrowserQL configuration for Amsterdam endpoint
-const BROWSERQL_ENDPOINT = 'https://production-ams.browserless.io/chromium/bql'
-const BROWSERQL_TOKEN = Deno.env.get('BROWSERQL_TOKEN') || '2SWMmTcJ5Xy9YFNd1c30ebed5875c88c3a2b2505ba65ccedb'
+// BaaS Integration - Enhanced SSR Proxy with Browser as a Service
+// Updated BaaS configuration for Amsterdam endpoint  
+const BROWSERLESS_API_TOKEN = Deno.env.get('BROWSERLESS_API_TOKEN') || '2SWMmTcJ5Xy9YFNd1c30ebed5875c88c3a2b2505ba65ccedb'
+const BROWSERLESS_BASE_URL = 'https://production-ams.browserless.io'
 
-interface BrowserQLRenderOptions {
+interface BaaSRenderOptions {
   targetUrl: string
   sessionId?: string
-  waitUntil?: 'load' | 'domcontentloaded' | 'networkIdle' | 'firstMeaningfulPaint' | 'firstContentfulPaint'
+  waitUntil?: 'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2'
   timeout?: number
   viewport?: { width: number; height: number }
   userAgent?: string
-  useProxy?: boolean
-  proxyCountry?: string
-  bypassBot?: boolean
-  solveCaptcha?: boolean
+  stealth?: boolean
+  blockAds?: boolean
+  blockResources?: string[]
 }
 
-interface BrowserQLResponse {
-  data?: {
-    goto?: { status: number }
-    html?: { html: string }
-    screenshot?: { base64: string }
-    verify?: { found: boolean; solved: boolean; time: number }
-    captcha?: { found: boolean; solved: boolean; time: number }
+interface BaaSResponse {
+  html?: string
+  screenshot?: string
+  error?: string
+  metrics?: {
+    loadTime: number
+    domElements: number
+    networkRequests: number
   }
-  errors?: Array<{ message: string }>
 }
 
-async function renderWithBrowserQL(
-  options: BrowserQLRenderOptions
-): Promise<{ html: string; screenshot?: string; error?: string; metadata?: any }> {
-  
+async function renderWithBaaS(options: BaaSRenderOptions): Promise<BaaSResponse> {
   const {
     targetUrl,
     sessionId,
-    waitUntil = 'networkIdle',
+    waitUntil = 'networkidle2',
     timeout = 30000,
     viewport = { width: 1920, height: 1080 },
-    userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    useProxy = true,
-    proxyCountry = 'nl', // Netherlands for Amsterdam region
-    bypassBot = true,
-    solveCaptcha = true
+    userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    stealth = true,
+    blockAds = true,
+    blockResources = ['image', 'font'] // Optional: block heavy resources for faster loading
   } = options
 
-  if (!BROWSERQL_TOKEN) {
-    console.error('BROWSERQL_TOKEN environment variable is not set')
-    throw new Error('BrowserQL configuration error')
+  if (!BROWSERLESS_API_TOKEN) {
+    throw new Error('BROWSERLESS_API_TOKEN environment variable is required')
   }
 
   try {
-    console.log(`Rendering ${targetUrl} with BrowserQL (Amsterdam region)`)
+    console.log(`Rendering ${targetUrl} with BaaS (Amsterdam region)`)
     
-    // Build the GraphQL query with conditional bot detection bypass
-    const query = `
-      mutation RenderPage($url: String!) {
-        goto(url: $url, waitUntil: ${waitUntil}) {
-          status
-        }
-        
-        ${bypassBot ? `
-        # Bypass Cloudflare and other bot detection
-        verify(type: cloudflare) {
-          found
-          solved
-          time
-        }
-        ` : ''}
-        
-        ${solveCaptcha ? `
-        # Solve CAPTCHAs if present
-        verify(type: hcaptcha) {
-          found
-          solved
-          time
-        }
-        ` : ''}
-        
-        # Get the page HTML
-        html {
-          html
-        }
-        
-        # Optional: Get screenshot for debugging
-        screenshot(type: jpeg, quality: 80) {
-          base64
-        }
-      }
-    `
-
-    // Build query parameters for enhanced bot detection bypass
+    // Build query parameters for the request
     const queryParams = new URLSearchParams({
-      token: BROWSERQL_TOKEN,
-      timeout: timeout.toString(),
-      ...(useProxy && {
-        proxy: 'residential',
-        proxyCountry,
-        proxySticky: 'true' // Maintain same IP for entire session
-      })
+      token: BROWSERLESS_API_TOKEN
     })
-    
-    const requestBody = {
-      query,
-      variables: { url: targetUrl }
+
+    // Add stealth mode via proxy if enabled
+    if (stealth) {
+      queryParams.append('proxy', 'residential')
+      queryParams.append('proxyCountry', 'nl') // Netherlands for Amsterdam region
     }
 
-    console.log('BrowserQL request:', { targetUrl, useProxy, proxyCountry, bypassBot })
+    // The /content endpoint has a very simple API - it only accepts URL
+    const requestBody = {
+      url: targetUrl
+    }
+
+    // Add user agent to headers instead of body
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json'
+    }
     
-    const response = await fetch(`${BROWSERQL_ENDPOINT}?${queryParams.toString()}`, {
+    if (userAgent) {
+      headers['User-Agent'] = userAgent
+    }
+
+    const response = await fetch(`${BROWSERLESS_BASE_URL}/content?${queryParams.toString()}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': userAgent
-      },
+      headers,
       body: JSON.stringify(requestBody)
     })
 
     if (!response.ok) {
       const errorText = await response.text()
-      throw new Error(`BrowserQL API error (${response.status}): ${errorText}`)
+      throw new Error(`BaaS API error (${response.status}): ${errorText}`)
     }
 
-    const result: BrowserQLResponse = await response.json()
+    const html = await response.text()
     
-    if (result.errors && result.errors.length > 0) {
-      throw new Error(`BrowserQL GraphQL errors: ${result.errors.map(e => e.message).join(', ')}`)
-    }
-
-    if (!result.data?.html?.html) {
-      throw new Error('No HTML content received from BrowserQL')
-    }
-
-    // Extract metadata about bot detection bypass
-    const metadata = {
-      status: result.data.goto?.status || 200,
-      botDetectionBypassed: !!result.data.verify?.solved,
-      captchaSolved: !!result.data.captcha?.solved,
-      cloudflareFound: !!result.data.verify?.found,
-      captchaFound: !!result.data.captcha?.found,
-      verificationTime: result.data.verify?.time || 0,
-      captchaTime: result.data.captcha?.time || 0
-    }
-
     // Post-process the rendered HTML
-    const processedHtml = postProcessBrowserQLHTML(result.data.html.html, targetUrl, sessionId, metadata)
+    const processedHtml = postProcessBaaSHTML(html, targetUrl, sessionId)
     
-    console.log('BrowserQL rendering successful:', {
+    // Extract metrics from response headers (if available)
+    const metrics = {
+      loadTime: parseInt(response.headers.get('x-response-time') || '0'),
+      domElements: 0, // Could be extracted from HTML if needed
+      networkRequests: parseInt(response.headers.get('x-network-requests') || '0')
+    }
+    
+    console.log('BaaS rendering successful:', {
       url: targetUrl,
-      status: metadata.status,
-      botDetectionBypassed: metadata.botDetectionBypassed,
-      captchaSolved: metadata.captchaSolved
+      loadTime: metrics.loadTime,
+      contentLength: html.length
     })
     
     return { 
       html: processedHtml,
-      screenshot: result.data.screenshot?.base64,
-      metadata
+      metrics
     }
     
   } catch (error) {
-    console.error('BrowserQL rendering failed:', error)
+    console.error('BaaS rendering failed:', error)
     return { 
       html: '', 
-      error: `BrowserQL rendering failed: ${error.message}` 
+      error: `BaaS rendering failed: ${error.message}` 
     }
   }
 }
 
-// Enhanced post-processing for BrowserQL rendered content
-function postProcessBrowserQLHTML(
-  html: string, 
-  targetUrl: string, 
-  sessionId?: string,
-  metadata?: any
-): string {
+// Simplified post-processing for BaaS rendered content
+function postProcessBaaSHTML(html: string, targetUrl: string, sessionId?: string): string {
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html')
     if (!doc) return html
@@ -656,11 +598,12 @@ function postProcessBrowserQLHTML(
     baseTag.setAttribute('href', new URL(targetUrl).origin + '/')
     head.insertBefore(baseTag, head.firstChild)
 
-    // Add BrowserQL metadata
-    const browserqlMeta = doc.createElement('meta')
-    browserqlMeta.setAttribute('name', 'browserql-rendered')
-    browserqlMeta.setAttribute('content', 'true')
-    head.appendChild(browserqlMeta)
+    // Add BaaS metadata
+    const baasMetadata = doc.createElement('meta')
+    baasMetadata.setAttribute('name', 'baas-rendered')
+    baasMetadata.setAttribute('content', 'true')
+    baasMetadata.setAttribute('data-renderer', 'browserless-baas')
+    head.appendChild(baasMetadata)
 
     if (sessionId) {
       const sessionMeta = doc.createElement('meta')
@@ -669,34 +612,47 @@ function postProcessBrowserQLHTML(
       head.appendChild(sessionMeta)
     }
 
-    // Add metadata about bot detection bypass
-    if (metadata) {
-      const metadataMeta = doc.createElement('meta')
-      metadataMeta.setAttribute('name', 'browserql-metadata')
-      metadataMeta.setAttribute('content', JSON.stringify(metadata))
-      head.appendChild(metadataMeta)
-    }
-
-    // Remove any remaining frame-busting scripts
-    const scripts = doc.querySelectorAll('script')
-    scripts.forEach(script => {
-      const content = script.textContent || ''
-      if (content.includes('top.location') || 
-          content.includes('parent.location') ||
-          content.includes('window.top') ||
-          content.includes('frameElement')) {
-        script.remove()
-      }
-    })
+    // Enhanced content sanitization for BaaS
+    sanitizeForProxy(doc)
 
     return doc.documentElement?.outerHTML || html
   } catch (error) {
-    console.warn('BrowserQL post-processing failed, returning original HTML:', error)
+    console.warn('BaaS post-processing failed, returning original HTML:', error)
     return html
   }
 }
 
-// Fallback handler for when BrowserQL fails
+// Enhanced content sanitization
+function sanitizeForProxy(doc: Document): void {
+  // Remove frame-busting scripts more aggressively
+  const scripts = doc.querySelectorAll('script')
+  scripts.forEach(script => {
+    const content = script.textContent || ''
+    const problematicPatterns = [
+      /window\.top/gi,
+      /parent\.location/gi,
+      /top\.location/gi,
+      /frameElement/gi,
+      /document\.domain/gi
+    ]
+    
+    for (const pattern of problematicPatterns) {
+      if (pattern.test(content)) {
+        script.remove()
+        break
+      }
+    }
+  })
+
+  // Remove or modify problematic meta tags
+  const problematicMetas = doc.querySelectorAll(
+    'meta[http-equiv*="refresh"], ' +
+    'meta[http-equiv*="Content-Security-Policy"]'
+  )
+  problematicMetas.forEach(meta => meta.remove())
+}
+
+// Fallback handler for when BaaS fails
 async function handleFallbackProxy(
   req: Request, 
   validatedUrl: string, 
@@ -836,7 +792,7 @@ serve(async (req) => {
     const bypassBot = url.searchParams.get('bypass') !== 'false' // Default to true
     const useProxy = url.searchParams.get('proxy') !== 'false' // Default to true
     const proxyCountry = url.searchParams.get('country') || 'nl' // Default to Netherlands
-    const customWait = url.searchParams.get('wait') as 'load' | 'domcontentloaded' | 'networkIdle' | 'firstMeaningfulPaint' | 'firstContentfulPaint' | null
+    const customWait = url.searchParams.get('wait') as 'load' | 'domcontentloaded' | 'networkidle0' | 'networkidle2' | null
     
     // If no target URL is provided, return a helpful message instead of error
     if (!targetUrl) {
@@ -844,41 +800,36 @@ serve(async (req) => {
       if (!sessionId) {
         return new Response(
           JSON.stringify({ 
-            message: 'Enhanced Proxy Service v3.0 - BrowserQL Enabled',
+            message: 'Enhanced Proxy Service v4.0 - BaaS Enabled',
             status: 'operational',
             features: {
-              renderer: 'browserql-graphql',
+              renderer: 'browserless-baas',
               region: 'amsterdam-europe',
               capabilities: [
-                'bot-detection-bypass',
-                'captcha-solving',
-                'residential-proxies',
-                'javascript-execution',
-                'screenshot-capture'
+                'stealth-browsing',
+                'ad-blocking',
+                'resource-optimization',
+                'fast-rendering'
               ],
               modes: ['iframe', 'ssr'],
               qualities: ['fast', 'balanced', 'complete'],
-              waitStrategies: ['load', 'domcontentloaded', 'networkIdle', 'firstMeaningfulPaint', 'firstContentfulPaint'],
+              waitStrategies: ['load', 'domcontentloaded', 'networkidle0', 'networkidle2'],
               defaultMode: 'ssr',
               defaultQuality: 'balanced'
             },
             usage: {
               basic: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true',
-              withBotBypass: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&bypass=true&proxy=true',
-              withCountry: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&country=us&quality=complete',
-              withCustomWait: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&wait=load',
-              fastMode: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&quality=fast&wait=load'
+              optimized: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&quality=fast',
+              stealth: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&quality=complete',
+              withCustomWait: 'GET /proxy-service/{sessionId}/{encodedTargetUrl}?ssr=true&wait=networkidle0'
             },
             parameters: {
               ssr: 'Enable server-side rendering (true/false)',
               quality: 'Render quality: fast, balanced, complete',
-              wait: 'Wait strategy: load, domcontentloaded, networkIdle, firstMeaningfulPaint, firstContentfulPaint',
-              bypass: 'Enable bot detection bypass (true/false)',
-              proxy: 'Use residential proxy (true/false)',
-              country: 'Proxy country code (nl, us, gb, de, fr, ca)',
+              wait: 'Wait strategy: load, domcontentloaded, networkidle0, networkidle2',
               csp: 'Content Security Policy level (permissive, balanced, strict)'
             },
-            version: '3.0.0'
+            version: '4.0.0'
           }), 
           { 
             status: 200,
@@ -905,28 +856,27 @@ serve(async (req) => {
 
     const startTime = Date.now()
 
-    // Handle SSR mode with BrowserQL
+    // Handle SSR mode with BaaS
     if (ssrMode) {
-      console.log(`Using BrowserQL for enhanced SSR rendering: ${validatedUrl}`)
+      console.log(`Using BaaS for enhanced SSR rendering: ${validatedUrl}`)
       
-      // Configure BrowserQL options based on quality setting
-      const browserqlOptions: BrowserQLRenderOptions = {
+      // Configure BaaS options based on quality setting
+      const baasOptions: BaaSRenderOptions = {
         targetUrl: validatedUrl,
         sessionId,
-        waitUntil: customWait || (renderQuality === 'fast' ? 'load' : 
-                  renderQuality === 'complete' ? 'networkIdle' : 'firstContentfulPaint'),
-        timeout: renderQuality === 'fast' ? 20000 : 
-                renderQuality === 'complete' ? 90000 : 45000,
+        waitUntil: customWait || (renderQuality === 'fast' ? 'domcontentloaded' : 
+                  renderQuality === 'complete' ? 'networkidle0' : 'networkidle2'),
+        timeout: renderQuality === 'fast' ? 15000 : 
+                renderQuality === 'complete' ? 45000 : 30000,
         userAgent: req.headers.get('user-agent') || undefined,
-        useProxy,
-        proxyCountry,
-        bypassBot,
-        solveCaptcha: renderQuality === 'complete' // Only solve CAPTCHAs on complete quality
+        stealth: renderQuality !== 'fast', // Enable stealth for balanced and complete
+        blockAds: true,
+        blockResources: renderQuality === 'fast' ? ['image', 'font', 'media'] : [] // Optimize for fast mode
       }
 
-      console.log(`BrowserQL settings: quality=${renderQuality}, waitUntil=${browserqlOptions.waitUntil}, timeout=${browserqlOptions.timeout}ms`)
+      console.log(`BaaS settings: quality=${renderQuality}, waitUntil=${baasOptions.waitUntil}, timeout=${baasOptions.timeout}ms`)
 
-      const renderResult = await renderWithBrowserQL(browserqlOptions)
+      const renderResult = await renderWithBaaS(baasOptions)
       const endTime = Date.now()
       const responseTime = endTime - startTime
 
@@ -937,13 +887,14 @@ serve(async (req) => {
         if (renderResult.error.includes('timeout') && renderQuality !== 'fast') {
           console.log('Retrying with faster settings due to timeout...')
           const fastOptions = {
-            ...browserqlOptions,
-            waitUntil: 'load' as const,
-            timeout: 20000,
-            bypassBot: false,
-            useProxy: false
+            ...baasOptions,
+            waitUntil: 'domcontentloaded' as const,
+            timeout: 15000,
+            stealth: false,
+            blockAds: false,
+            blockResources: ['image', 'font', 'media', 'stylesheet']
           }
-          const retryResult = await renderWithBrowserQL(fastOptions)
+          const retryResult = await renderWithBaaS(fastOptions)
           if (!retryResult.error) {
             console.log('Retry successful with faster settings')
             return new Response(retryResult.html, {
@@ -964,20 +915,19 @@ serve(async (req) => {
         cspMode
       )
 
-      // Enhanced headers for BrowserQL rendered content
-      responseHeaders.set('X-Renderer', 'browserql-graphql')
+              // Enhanced headers for BaaS rendered content
+      responseHeaders.set('X-Renderer', 'browserless-baas')
       responseHeaders.set('X-Render-Quality', renderQuality)
       responseHeaders.set('X-Render-Time', responseTime.toString())
       responseHeaders.set('X-Region', 'amsterdam-europe')
-      responseHeaders.set('X-Bot-Bypass', bypassBot.toString())
-      responseHeaders.set('X-Proxy-Used', useProxy.toString())
-      responseHeaders.set('X-Proxy-Country', proxyCountry)
+              responseHeaders.set('X-Stealth-Mode', (renderQuality !== 'fast').toString())
+        responseHeaders.set('X-Ad-Blocking', 'true')
 
       // Add metadata headers if available
-      if (renderResult.metadata) {
-        responseHeaders.set('X-Bot-Detection-Bypassed', renderResult.metadata.botDetectionBypassed.toString())
-        responseHeaders.set('X-Captcha-Solved', renderResult.metadata.captchaSolved.toString())
-        responseHeaders.set('X-Cloudflare-Found', renderResult.metadata.cloudflareFound.toString())
+      if (renderResult.metrics) {
+        responseHeaders.set('X-Load-Time', renderResult.metrics.loadTime.toString())
+        responseHeaders.set('X-Dom-Elements', renderResult.metrics.domElements.toString())
+        responseHeaders.set('X-Network-Requests', renderResult.metrics.networkRequests.toString())
       }
 
       // Update metrics for authenticated requests
@@ -998,19 +948,17 @@ serve(async (req) => {
         await supabase.from('usage_logs').insert({
           user_id: userId,
           session_id: sessionId,
-          event_type: 'browserql_render',
+          event_type: 'baas_render',
           metadata: {
-            renderer: 'browserql-graphql',
+            renderer: 'browserless-baas',
             quality: renderQuality,
             url: validatedUrl,
             response_time_ms: responseTime,
-            html_size_bytes: new TextEncoder().encode(renderResult.html).length,
-            bot_bypass_enabled: bypassBot,
-            proxy_enabled: useProxy,
-            proxy_country: proxyCountry,
-            bot_detection_bypassed: renderResult.metadata?.botDetectionBypassed || false,
-            captcha_solved: renderResult.metadata?.captchaSolved || false,
-            cloudflare_found: renderResult.metadata?.cloudflareFound || false
+            html_size_bytes: new TextEncoder().encode(renderResult.html || '').length,
+            stealth_enabled: renderQuality !== 'fast',
+            ad_blocking_enabled: true,
+            load_time_ms: renderResult.metrics?.loadTime || 0,
+            network_requests: renderResult.metrics?.networkRequests || 0
           }
         })
       }
@@ -1140,7 +1088,9 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({ 
         error: error.message,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        renderer: 'browserless-baas',
+        fallback: 'Try switching to iframe mode or using traditional proxy'
       }), 
       { 
         status: error.message.includes('session') || error.message.includes('balance') ? 401 : 400,

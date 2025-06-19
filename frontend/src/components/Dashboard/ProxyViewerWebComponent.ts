@@ -10,7 +10,7 @@ export class ProxyViewerElement extends HTMLElement {
   
   // Observed attributes for reactive updates
   static get observedAttributes(): string[] {
-    return ['src', 'session-id', 'mode', 'csp-level', 'fallback-enabled', 'render-quality', 'bypass-bot', 'use-proxy', 'proxy-country']
+    return ['src', 'session-id', 'mode', 'csp-level', 'fallback-enabled', 'render-quality', 'stealth', 'block-ads', 'block-resources']
   }
 
   constructor() {
@@ -347,19 +347,17 @@ export class ProxyViewerElement extends HTMLElement {
     
     const content = await response.text()
     
-    // Extract BrowserQL metadata from response headers
-    const browserqlMetadata: any = {}
-    if (response.headers.get('X-Renderer') === 'browserql-graphql') {
-      browserqlMetadata.renderer = 'browserql-graphql'
-      browserqlMetadata.renderTime = parseInt(response.headers.get('X-Render-Time') || '0')
-      browserqlMetadata.region = response.headers.get('X-Region') || 'unknown'
-      browserqlMetadata.botDetectionBypassed = response.headers.get('X-Bot-Detection-Bypassed') === 'true'
-      browserqlMetadata.captchaSolved = response.headers.get('X-Captcha-Solved') === 'true'
-      browserqlMetadata.cloudflareFound = response.headers.get('X-Cloudflare-Found') === 'true'
+    // Extract BaaS metadata from response headers
+    const baasMetadata: any = {}
+    if (response.headers.get('X-Renderer') === 'browserless-baas') {
+      baasMetadata.renderer = 'browserless-baas'
+      baasMetadata.renderTime = parseInt(response.headers.get('X-Render-Time') || '0')
+      baasMetadata.loadTime = parseInt(response.headers.get('X-Load-Time') || '0')
+      baasMetadata.networkRequests = parseInt(response.headers.get('X-Network-Requests') || '0')
       
-      // Dispatch BrowserQL metadata event
-      this.dispatchEvent(new CustomEvent('browserql-metadata', {
-        detail: browserqlMetadata,
+      // Dispatch BaaS metadata event
+      this.dispatchEvent(new CustomEvent('baas-metadata', {
+        detail: baasMetadata,
         bubbles: true
       }))
     }
@@ -554,23 +552,14 @@ export class ProxyViewerElement extends HTMLElement {
       params.set('ssr', 'true')
       params.set('csp', this.config.cspLevel)
       
-      // Add BrowserQL parameters
+      // Add BaaS parameters
       const renderQuality = this.getAttribute('render-quality')
-      const bypassBot = this.getAttribute('bypass-bot')
-      const useProxy = this.getAttribute('use-proxy')
-      const proxyCountry = this.getAttribute('proxy-country')
+      const stealth = this.getAttribute('stealth')
+      const blockAds = this.getAttribute('block-ads')
+      const blockResources = this.getAttribute('block-resources')
       
       if (renderQuality) {
         params.set('quality', renderQuality)
-      }
-      if (bypassBot) {
-        params.set('bypass', bypassBot)
-      }
-      if (useProxy) {
-        params.set('proxy', useProxy)
-      }
-      if (proxyCountry) {
-        params.set('country', proxyCountry)
       }
     }
     
